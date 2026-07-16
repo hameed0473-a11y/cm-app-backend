@@ -221,20 +221,20 @@ router.post('/web-delete-target', requireProToken, async (req, res) => {
 
     if (error || !userData) return res.status(404).json({ error: 'Could not find your data.' });
 
-    // ARCHIVE, don't delete. Every payment ever collected must stay
-    // permanently accessible — deleting a goal must never destroy the
-    // financial record of what was collected against it. Marking the
-    // target's status away from 'active' already makes it disappear from
-    // every active-goals view on the website (activeTargets filters on
-    // status === 'active', and pledges are shown filtered against that
-    // same active-targets list) — so this preserves the exact same
-    // visible behavior as before, while keeping contributors,
-    // contributions, and pledges completely untouched underneath.
+    // COMPLETE, don't delete. Every payment ever collected must stay
+    // permanently accessible — closing a goal must never destroy the
+    // financial record of what was collected against it. This used to set
+    // status: 'archived', which hid the goal from every tab entirely; it
+    // now sets status: 'completed' instead, which keeps the goal visible
+    // (read-only) in its Monthly/Yearly/Pledges tab under "Completed
+    // Goals" — same as goals that reach 100% funding automatically get
+    // marked. Contributors, contributions, and pledges underneath are
+    // completely untouched either way.
     const targets = userData.targets || [];
     const idx = targets.findIndex(t => t.id === targetId);
     if (idx === -1) return res.status(404).json({ error: 'Goal not found.' });
 
-    targets[idx] = { ...targets[idx], status: 'archived' };
+    targets[idx] = { ...targets[idx], status: 'completed', completedAt: new Date().toISOString() };
 
     const { error: updateError } = await supabase
       .from('pro_user_data')
@@ -243,8 +243,8 @@ router.post('/web-delete-target', requireProToken, async (req, res) => {
 
     if (updateError) return res.status(500).json({ error: updateError.message });
 
-    // Dual-write: mirror the archived status into the new table too.
-    await mirrorArchiveTarget(supabase, targetId, 'archived');
+    // Dual-write: mirror the completed status into the new table too.
+    await mirrorArchiveTarget(supabase, targetId, 'completed');
 
     res.json({ success: true });
   } catch (err) {
