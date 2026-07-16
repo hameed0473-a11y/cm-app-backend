@@ -18,5 +18,6 @@ router.use(require('./goals'));        // /web-create-target, /web-subscribe-con
 router.use(require('./pledges'));      // /web-create-pledge
 router.use(require('./settings'));     // /web-save-integration, /web-integration-status, /web-set-currency, /web-remove-integration, /web-set-profile
 router.use(require('./tickets'));      // /web-raise-ticket, /web-my-tickets
+router.use(require('./whatsapp'));     // /web-save-whatsapp-integration, /web-whatsapp-integration-status, /web-remove-whatsapp-integration, /web-send-whatsapp-bulk
 
 module.exports = router;
