@@ -39,6 +39,18 @@ router.get('/pro/lookup-dues', rateLimit(20, 10 * 60000), async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
+    // Batch-fetch each treasurer's collection currency so every due can be
+    // shown in the currency it's actually owed in, instead of silently
+    // defaulting to INR for everyone (that was the bug — this endpoint
+    // never looked up currency at all before).
+    const userIds = [...new Set((allUserData || []).map(r => r.user_id))];
+    const { data: currencyRows } = await supabase
+      .from('pro_users')
+      .select('id, currency')
+      .in('id', userIds);
+    const currencyByUserId = {};
+    (currencyRows || []).forEach(r => { currencyByUserId[r.id] = r.currency || 'INR'; });
+
     const dues = [];
 
     (allUserData || []).forEach(row => {
@@ -69,7 +81,8 @@ router.get('/pro/lookup-dues', rateLimit(20, 10 * 60000), async (req, res) => {
               targetName: target.name,
               targetCategory: target.category,
               contributorName: contributor.name,
-              amountDue
+              amountDue,
+              currency: currencyByUserId[row.user_id] || 'INR'
             });
           }
         });
@@ -90,7 +103,8 @@ router.get('/pro/lookup-dues', rateLimit(20, 10 * 60000), async (req, res) => {
               targetName: target.name,
               targetCategory: 'event',
               contributorName: p.name,
-              amountDue
+              amountDue,
+              currency: currencyByUserId[row.user_id] || 'INR'
             });
           }
         });
@@ -236,6 +250,21 @@ router.get('/pro/payment-link-details', async (req, res) => {
     const contributor = (userData?.contributors || []).find(c => c.id === contributorId);
     const target = (userData?.targets || []).find(t => t.id === targetId);
 
+    // Razorpay always settles in INR regardless of the treasurer's chosen
+    // collection currency (same rule lib/gateways.js already applies when
+    // creating the link) — only Stripe/PayPal actually use their chosen
+    // currency. Without this, a CAD/USD/etc. treasurer's Razorpay-created
+    // link would incorrectly report their non-INR currency here.
+    let currency = 'INR';
+    if (details.provider !== 'razorpay') {
+      const { data: proUserRow } = await supabase
+        .from('pro_users')
+        .select('currency')
+        .eq('id', proUserId)
+        .single();
+      currency = proUserRow?.currency || 'INR';
+    }
+
     const maskName = (name) => {
       if (!name) return 'Subscriber';
       return name.split(' ')
@@ -248,6 +277,7 @@ router.get('/pro/payment-link-details', async (req, res) => {
       maskedName: maskName(contributor?.name),
       targetName: target?.name || 'Contribution',
       amount: details.amountPaise, // paise
+      currency,
       status: details.status,      // 'created' | 'paid' | 'cancelled' | 'expired'
       shortUrl: details.url,
       provider: details.provider
