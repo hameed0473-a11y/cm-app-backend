@@ -5,9 +5,39 @@ const supabase = require('../../lib/supabase');
 const { requireProToken } = require('../../middleware/auth');
 const { getDefaultBreakup, getRemainingBreakup, breakupTotal } = require('../../utils/arrears');
 const { getMaxReceipts, getReceiptUsage } = require('../../lib/pricing');
-const { mirrorContribution, mirrorPledge } = require('../../utils/mirrorWrite');
+const { mirrorContribution, mirrorPledge, mirrorArchiveTarget } = require('../../utils/mirrorWrite');
 
 const router = express.Router();
+
+// Aggregate total/collected for a Monthly/Yearly goal across EVERY
+// contributor subscribed to it — same calculation the dashboard itself
+// uses (goalDetail), just server-side, so auto-completion can check
+// "is this goal 100% funded" right after a payment lands.
+function computeMonthlyYearlyTotals(target, contributors, contributions) {
+  let total = 0;
+  contributors.forEach(c => {
+    if (!(c.targetIds || []).includes(target.id)) return;
+    const fallbackAmount = c.targetAmounts?.[target.id] ?? 0;
+    const breakup = c.targetBreakups?.[target.id] || getDefaultBreakup(target, fallbackAmount);
+    total += breakupTotal(breakup);
+  });
+  const collected = contributions
+    .filter(c => c.targetId === target.id && !c.deleted)
+    .reduce((s, c) => s + c.amountPaid, 0);
+  return { total, collected };
+}
+
+// Flips a target to status: 'completed' (still visible, read-only) if
+// it isn't already — used by both the auto-detection below and the
+// separate manual "mark complete" action in routes/web/goals.js.
+async function markTargetCompletedIfNeeded(supabase, userId, targets, targetId) {
+  const idx = targets.findIndex(t => t.id === targetId);
+  if (idx === -1 || targets[idx].status !== 'active') return;
+  targets[idx] = { ...targets[idx], status: 'completed', completedAt: new Date().toISOString() };
+  const { error } = await supabase.from('pro_user_data').update({ targets }).eq('user_id', userId);
+  if (error) { console.error('Auto-complete target update failed:', error.message); return; }
+  await mirrorArchiveTarget(supabase, targetId, 'completed');
+}
 
 // ===============================================================
 // PRO WEB DASHBOARD — payment collection (the one place receipts are
@@ -94,6 +124,16 @@ router.post('/web-collect-payment', requireProToken, async (req, res) => {
 
       // Dual-write: mirror the updated pledge into the new normalized table too.
       await mirrorPledge(supabase, req.proUserId, pledges[idx]);
+
+      // Auto-complete: if every pledge for this goal is now fully paid,
+      // mark the goal itself completed — still visible read-only in its
+      // tab, not hidden the way archiving used to work.
+      const targetPledges = pledges.filter(pl => pl.targetId === targetId);
+      const allFullyPaid = targetPledges.length > 0 && targetPledges.every(pl => pl.status === 'fully_paid');
+      if (allFullyPaid) {
+        const targets = userData.targets || [];
+        await markTargetCompletedIfNeeded(supabase, req.proUserId, targets, targetId);
+      }
     } else {
       // Same guard for monthly/yearly goals — recompute what's actually still
       // due from the freshly-fetched data (same arrears-aware calculation the
@@ -139,6 +179,17 @@ router.post('/web-collect-payment', requireProToken, async (req, res) => {
 
       // Dual-write: mirror the new contribution into the new normalized table too.
       await mirrorContribution(supabase, req.proUserId, newContribution);
+
+      // Auto-complete: if this goal is now 100% funded across every
+      // subscribed contributor, mark it completed — still visible
+      // read-only in its tab, not hidden.
+      if (target) {
+        const { total, collected } = computeMonthlyYearlyTotals(target, contributors, contributions);
+        if (total > 0 && collected >= total) {
+          const targets = userData.targets || [];
+          await markTargetCompletedIfNeeded(supabase, req.proUserId, targets, targetId);
+        }
+      }
     }
 
     // Increment the receipt counter — this is the only place it moves.
