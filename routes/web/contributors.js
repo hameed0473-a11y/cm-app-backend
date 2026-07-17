@@ -58,6 +58,7 @@ router.post('/web-add-contributors', requireProToken, async (req, res) => {
         id: `CONTR-${nextIdNum}`,
         name,
         mobile,
+        address: String(nc.address || '').trim() || undefined,
         type: nc.type || 'monthly',
         createdAt: new Date().toISOString().slice(0, 10)
       };
@@ -91,7 +92,7 @@ router.post('/web-add-contributors', requireProToken, async (req, res) => {
 // WEB EDIT CONTRIBUTOR
 // ---------------------------------------------------------------
 router.post('/web-edit-contributor', requireProToken, async (req, res) => {
-  const { contributorId, name, mobile } = req.body;
+  const { contributorId, name, mobile, address } = req.body;
   if (!contributorId || !name || !mobile) {
     return res.status(400).json({ error: 'contributorId, name, and mobile are required' });
   }
@@ -109,7 +110,7 @@ router.post('/web-edit-contributor', requireProToken, async (req, res) => {
     const idx = contributors.findIndex(c => c.id === contributorId);
     if (idx === -1) return res.status(404).json({ error: 'Contributor not found.' });
 
-    contributors[idx] = { ...contributors[idx], name: name.trim(), mobile: mobile.trim() };
+    contributors[idx] = { ...contributors[idx], name: name.trim(), mobile: mobile.trim(), address: address ? String(address).trim() : contributors[idx].address };
 
     const { error: updateError } = await supabase
       .from('pro_user_data')
@@ -119,7 +120,7 @@ router.post('/web-edit-contributor', requireProToken, async (req, res) => {
     if (updateError) return res.status(500).json({ error: updateError.message });
 
     // Dual-write: mirror the edit into the new table too.
-    await mirrorEditContributor(supabase, contributorId, name.trim(), mobile.trim());
+    await mirrorEditContributor(supabase, contributorId, name.trim(), mobile.trim(), contributors[idx].address);
 
     res.json({ success: true });
   } catch (err) {
