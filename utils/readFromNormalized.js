@@ -61,6 +61,7 @@ async function fetchNormalizedUserData(supabase, userId) {
       id: c.id,
       name: c.name,
       mobile: c.mobile,
+      address: c.address || undefined,
       type: c.type || undefined,
       createdAt: c.created_at ? c.created_at.slice(0, 10) : undefined,
       targetIds,
