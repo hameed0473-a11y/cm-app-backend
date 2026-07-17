@@ -26,6 +26,11 @@ router.post('/web-add-expense', requireProToken, async (req, res) => {
   const amount = Number(req.body.amount);
   const description = String(req.body.description || '').trim();
   const expenseDate = String(req.body.expenseDate || '').trim() || new Date().toISOString().slice(0, 10);
+  // Snapshotted by name, not a foreign key to payees.id — so an expense's
+  // record of who it was paid to survives even if that payee is later
+  // renamed or deleted, same reasoning used elsewhere in this app for
+  // "who collected this receipt" snapshots.
+  const payeeName = String(req.body.payeeName || '').trim();
 
   if (!EXPENSE_CATEGORIES.includes(category)) {
     return res.status(400).json({ error: 'Please choose a valid category.' });
@@ -41,6 +46,7 @@ router.post('/web-add-expense', requireProToken, async (req, res) => {
       category,
       amount,
       description: description || null,
+      payee_name: payeeName || null,
       expense_date: expenseDate,
       created_at: new Date().toISOString()
     };
@@ -63,7 +69,7 @@ router.get('/web-expenses', requireProToken, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('expenses')
-      .select('id, category, amount, description, expense_date, created_at')
+      .select('id, category, amount, description, payee_name, expense_date, created_at')
       .eq('user_id', req.proUserId)
       .order('expense_date', { ascending: false });
 
@@ -101,6 +107,91 @@ router.post('/web-delete-expense', requireProToken, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('web-delete-expense error:', err?.message || err);
+    res.status(500).json({ error: 'Server error. Please try again.' });
+  }
+});
+
+// ===============================================================
+// PAYEES — who money gets paid out to (vendors, staff, contractors,
+// etc). Kept separate from `contributors` (who money is collected
+// FROM) since these are conceptually opposite directions of money
+// flow. An expense links to a payee by NAME (snapshot), not a foreign
+// key — see the comment on /web-add-expense above.
+// ===============================================================
+
+// --- Add a payee ---
+router.post('/web-add-payee', requireProToken, async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const mobile = String(req.body.mobile || '').trim();
+  const address = String(req.body.address || '').trim();
+
+  if (!name) return res.status(400).json({ error: 'Payee name is required.' });
+
+  try {
+    const payee = {
+      id: `PAYEE-${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 10)}`,
+      user_id: req.proUserId,
+      name,
+      mobile: mobile || null,
+      address: address || null,
+      created_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase.from('payees').insert([payee]);
+    if (error) {
+      console.error('web-add-payee error:', error.message);
+      return res.status(500).json({ error: 'Could not save this payee.' });
+    }
+
+    res.json({ success: true, payee });
+  } catch (err) {
+    console.error('web-add-payee error:', err?.message || err);
+    res.status(500).json({ error: 'Server error. Please try again.' });
+  }
+});
+
+// --- List all payees ---
+router.get('/web-payees', requireProToken, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('payees')
+      .select('id, name, mobile, address, created_at')
+      .eq('user_id', req.proUserId)
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.error('web-payees error:', error.message);
+      return res.status(500).json({ error: 'Could not load payees.' });
+    }
+
+    res.json({ success: true, payees: data || [] });
+  } catch (err) {
+    console.error('web-payees error:', err?.message || err);
+    res.status(500).json({ error: 'Server error. Please try again.' });
+  }
+});
+
+// --- Delete a payee (does NOT touch any expense already logged against
+// their name — those keep their snapshotted payee_name regardless) ---
+router.post('/web-delete-payee', requireProToken, async (req, res) => {
+  const { payeeId } = req.body;
+  if (!payeeId) return res.status(400).json({ error: 'payeeId is required' });
+
+  try {
+    const { error } = await supabase
+      .from('payees')
+      .delete()
+      .eq('id', payeeId)
+      .eq('user_id', req.proUserId);
+
+    if (error) {
+      console.error('web-delete-payee error:', error.message);
+      return res.status(500).json({ error: 'Could not delete this payee.' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('web-delete-payee error:', err?.message || err);
     res.status(500).json({ error: 'Server error. Please try again.' });
   }
 });
