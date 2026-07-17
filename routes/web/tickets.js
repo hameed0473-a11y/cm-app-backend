@@ -65,7 +65,7 @@ router.get('/web-my-tickets', requireProToken, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('support_tickets')
-      .select('id, category, description, status, admin_remarks, created_at, resolved_at')
+      .select('id, category, description, status, admin_remarks, created_at, resolved_at, reopened_at')
       .eq('user_id', req.proUserId)
       .order('created_at', { ascending: false });
 
@@ -77,6 +77,45 @@ router.get('/web-my-tickets', requireProToken, async (req, res) => {
     res.json({ success: true, tickets: data || [] });
   } catch (err) {
     console.error('web-my-tickets error:', err?.message || err);
+    res.status(500).json({ error: 'Server error. Please try again.' });
+  }
+});
+
+// --- Reopen a ticket the treasurer previously had marked solved. Only
+// the treasurer who raised it can reopen it, and only from 'solved' —
+// this is deliberately their own action, separate from the admin's
+// Mark Solved/Pending toggle in routes/adminTickets.js. admin_remarks
+// from the earlier resolution is kept (not cleared) so the history of
+// what was done stays visible; reopened_at is set so the admin can see
+// this ticket has been reopened, not brand new. ---
+router.post('/web-reopen-ticket', requireProToken, async (req, res) => {
+  const { ticketId } = req.body;
+  if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
+
+  try {
+    const { data: ticket, error: fetchError } = await supabase
+      .from('support_tickets')
+      .select('id, user_id, status')
+      .eq('id', ticketId)
+      .single();
+
+    if (fetchError || !ticket) return res.status(404).json({ error: 'Ticket not found.' });
+    if (ticket.user_id !== req.proUserId) return res.status(403).json({ error: 'You can only reopen your own tickets.' });
+    if (ticket.status !== 'solved') return res.status(400).json({ error: 'Only solved tickets can be reopened.' });
+
+    const { error } = await supabase
+      .from('support_tickets')
+      .update({ status: 'pending', resolved_at: null, reopened_at: new Date().toISOString() })
+      .eq('id', ticketId);
+
+    if (error) {
+      console.error('web-reopen-ticket error:', error.message);
+      return res.status(500).json({ error: 'Could not reopen this ticket.' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('web-reopen-ticket error:', err?.message || err);
     res.status(500).json({ error: 'Server error. Please try again.' });
   }
 });
