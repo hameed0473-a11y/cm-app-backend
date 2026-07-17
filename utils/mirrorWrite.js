@@ -64,6 +64,7 @@ async function mirrorContributor(supabase, userId, contributor) {
       user_id: userId,
       name: contributor.name,
       mobile: contributor.mobile,
+      address: contributor.address || null,
       type: contributor.type || null,
       created_at: contributor.createdAt ? new Date(contributor.createdAt).toISOString() : new Date().toISOString()
     }], { onConflict: 'id' });
@@ -132,9 +133,9 @@ async function mirrorDeleteSubscription(supabase, contributorId, targetId) {
 }
 
 // Mirrors an edit to an existing contributor's name/mobile.
-async function mirrorEditContributor(supabase, contributorId, name, mobile) {
+async function mirrorEditContributor(supabase, contributorId, name, mobile, address) {
   try {
-    const { error } = await supabase.from('contributors').update({ name, mobile }).eq('id', contributorId);
+    const { error } = await supabase.from('contributors').update({ name, mobile, address: address || null }).eq('id', contributorId);
     if (error) console.warn('[mirror] contributor edit skipped:', contributorId, '-', error.message);
   } catch (err) {
     console.warn('[mirror] contributor edit threw:', contributorId, '-', err?.message || err);
