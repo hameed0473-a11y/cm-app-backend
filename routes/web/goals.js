@@ -208,6 +208,22 @@ router.post('/web-unsubscribe-contributors', requireProToken, async (req, res) =
 // fresh immediately before writing, consistent with every other /web-*
 // endpoint here.
 // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// DELETE and MARK COMPLETE are two separate actions now, producing two
+// separate (but equally read-only, equally visible) outcomes:
+//   - /web-delete-target      -> status: 'deleted'   -> shows under
+//     "Deleted Goals" in its tab
+//   - /web-complete-target    -> status: 'completed' -> shows under
+//     "Completed Goals" in its tab (same place goals that auto-complete
+//     via 100% funding land)
+// Neither one destroys anything underneath — contributors, contributions,
+// and pledges tied to the goal are completely untouched either way, and
+// every payment ever collected stays permanently visible in the read-only
+// detail view. The only difference between the two is which heading the
+// goal appears under, so a treasurer can tell "goals I closed out because
+// they were done" from "goals I deleted for some other reason" at a
+// glance.
+// ---------------------------------------------------------------
 router.post('/web-delete-target', requireProToken, async (req, res) => {
   const { targetId } = req.body;
   if (!targetId) return res.status(400).json({ error: 'targetId is required' });
@@ -221,15 +237,43 @@ router.post('/web-delete-target', requireProToken, async (req, res) => {
 
     if (error || !userData) return res.status(404).json({ error: 'Could not find your data.' });
 
-    // COMPLETE, don't delete. Every payment ever collected must stay
-    // permanently accessible — closing a goal must never destroy the
-    // financial record of what was collected against it. This used to set
-    // status: 'archived', which hid the goal from every tab entirely; it
-    // now sets status: 'completed' instead, which keeps the goal visible
-    // (read-only) in its Monthly/Yearly/Pledges tab under "Completed
-    // Goals" — same as goals that reach 100% funding automatically get
-    // marked. Contributors, contributions, and pledges underneath are
-    // completely untouched either way.
+    const targets = userData.targets || [];
+    const idx = targets.findIndex(t => t.id === targetId);
+    if (idx === -1) return res.status(404).json({ error: 'Goal not found.' });
+
+    targets[idx] = { ...targets[idx], status: 'deleted', deletedAt: new Date().toISOString() };
+
+    const { error: updateError } = await supabase
+      .from('pro_user_data')
+      .update({ targets, updated_at: new Date().toISOString() })
+      .eq('user_id', req.proUserId);
+
+    if (updateError) return res.status(500).json({ error: updateError.message });
+
+    // Dual-write: mirror the deleted status into the new table too.
+    await mirrorArchiveTarget(supabase, targetId, 'deleted');
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Web delete target error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to delete goal.' });
+  }
+});
+
+// --- Manual "Mark Complete" — the separate action from Delete above ---
+router.post('/web-complete-target', requireProToken, async (req, res) => {
+  const { targetId } = req.body;
+  if (!targetId) return res.status(400).json({ error: 'targetId is required' });
+
+  try {
+    const { data: userData, error } = await supabase
+      .from('pro_user_data')
+      .select('targets')
+      .eq('user_id', req.proUserId)
+      .single();
+
+    if (error || !userData) return res.status(404).json({ error: 'Could not find your data.' });
+
     const targets = userData.targets || [];
     const idx = targets.findIndex(t => t.id === targetId);
     if (idx === -1) return res.status(404).json({ error: 'Goal not found.' });
@@ -248,8 +292,8 @@ router.post('/web-delete-target', requireProToken, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error('Web delete target error:', err?.message || err);
-    res.status(500).json({ error: 'Failed to archive goal.' });
+    console.error('Web complete target error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to mark goal complete.' });
   }
 });
 
