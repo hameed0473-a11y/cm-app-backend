@@ -17,7 +17,7 @@ router.get('/admin-tickets', requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('support_tickets')
-      .select('id, user_id, name, mobile, category, description, status, admin_remarks, created_at, resolved_at')
+      .select('id, user_id, name, mobile, category, description, status, admin_remarks, created_at, resolved_at, reopened_at')
       .order('created_at', { ascending: false });
 
     if (error) {
