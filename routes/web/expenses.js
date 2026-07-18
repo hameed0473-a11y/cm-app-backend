@@ -124,18 +124,24 @@ router.post('/web-delete-expense', requireProToken, async (req, res) => {
 // --- Add a payee ---
 router.post('/web-add-payee', requireProToken, async (req, res) => {
   const name = String(req.body.name || '').trim();
+  const mobile = String(req.body.mobile || '').trim();
+  const category = String(req.body.category || '').trim();
   const bankAccountNumber = String(req.body.bankAccountNumber || '').trim();
   const bankName = String(req.body.bankName || '').trim();
   const ifscCode = String(req.body.ifscCode || '').trim();
   const merchantId = String(req.body.merchantId || '').trim();
 
   if (!name) return res.status(400).json({ error: 'Payee name is required.' });
+  if (!mobile) return res.status(400).json({ error: 'Mobile number is required.' });
+  if (!category) return res.status(400).json({ error: 'Please choose a category.' });
 
   try {
     const payee = {
       id: `PAYEE-${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 10)}`,
       user_id: req.proUserId,
       name,
+      mobile,
+      category,
       // Encrypted at rest, same scheme already used for the platform's
       // own bank details and every gateway secret in this app — never
       // stored or returned in plain text.
@@ -155,7 +161,8 @@ router.post('/web-add-payee', requireProToken, async (req, res) => {
     res.json({
       success: true,
       payee: {
-        id: payee.id, name, bankAccountMasked: maskAccountNumber(bankAccountNumber),
+        id: payee.id, name, mobile, category,
+        bankAccountMasked: maskAccountNumber(bankAccountNumber),
         bankName: payee.bank_name, ifscCode: payee.ifsc_code, merchantId: payee.merchant_id
       }
     });
@@ -171,7 +178,7 @@ router.get('/web-payees', requireProToken, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('payees')
-      .select('id, name, bank_account_number_enc, bank_name, ifsc_code, merchant_id, created_at')
+      .select('id, name, mobile, category, bank_account_number_enc, bank_name, ifsc_code, merchant_id, created_at')
       .eq('user_id', req.proUserId)
       .order('name', { ascending: true });
 
@@ -183,6 +190,8 @@ router.get('/web-payees', requireProToken, async (req, res) => {
     const payees = (data || []).map(p => ({
       id: p.id,
       name: p.name,
+      mobile: p.mobile,
+      category: p.category,
       bankAccountMasked: p.bank_account_number_enc ? maskAccountNumber(decrypt(p.bank_account_number_enc)) : null,
       bankName: p.bank_name,
       ifscCode: p.ifsc_code,
