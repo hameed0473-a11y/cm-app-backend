@@ -121,8 +121,11 @@ router.post('/web-delete-expense', requireProToken, async (req, res) => {
 // key — see the comment on /web-add-expense above.
 // ===============================================================
 
-// --- Add a payee (starts with exactly one category — more can be
-// linked afterward via /web-link-payee-category) ---
+// --- Add a payee. Dedupes by mobile: if this treasurer already has a
+// payee with this mobile number, the category gets linked to that
+// existing payee instead of creating a duplicate record (mirrors how
+// /web-add-contributors already dedupes contributors by mobile). This
+// also makes bulk import safe to re-run without piling up duplicates. ---
 router.post('/web-add-payee', requireProToken, async (req, res) => {
   const name = String(req.body.name || '').trim();
   const mobile = String(req.body.mobile || '').trim();
@@ -137,6 +140,34 @@ router.post('/web-add-payee', requireProToken, async (req, res) => {
   if (!category) return res.status(400).json({ error: 'Please choose a category.' });
 
   try {
+    const { data: existing } = await supabase
+      .from('payees')
+      .select('id, name, mobile, categories, bank_account_number_enc, bank_name, ifsc_code, merchant_id')
+      .eq('user_id', req.proUserId)
+      .eq('mobile', mobile)
+      .maybeSingle();
+
+    if (existing) {
+      const categories = existing.categories || [];
+      if (!categories.includes(category)) categories.push(category);
+
+      const { error } = await supabase.from('payees').update({ categories }).eq('id', existing.id);
+      if (error) {
+        console.error('web-add-payee (merge) error:', error.message);
+        return res.status(500).json({ error: 'Could not save this payee.' });
+      }
+
+      return res.json({
+        success: true,
+        merged: true,
+        payee: {
+          id: existing.id, name: existing.name, mobile: existing.mobile, categories,
+          bankAccountMasked: existing.bank_account_number_enc ? maskAccountNumber(decrypt(existing.bank_account_number_enc)) : null,
+          bankName: existing.bank_name, ifscCode: existing.ifsc_code, merchantId: existing.merchant_id
+        }
+      });
+    }
+
     const payee = {
       id: `PAYEE-${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 10)}`,
       user_id: req.proUserId,
@@ -161,6 +192,7 @@ router.post('/web-add-payee', requireProToken, async (req, res) => {
 
     res.json({
       success: true,
+      merged: false,
       payee: {
         id: payee.id, name, mobile, categories: payee.categories,
         bankAccountMasked: maskAccountNumber(bankAccountNumber),
