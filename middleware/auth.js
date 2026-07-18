@@ -69,8 +69,8 @@ function issueProAppToken(userId, mobile) {
   return jwt.sign({ type: 'pro_app', userId, mobile }, process.env.JWT_SECRET, { expiresIn: '90d' });
 }
 
-function issueStaffToken(staffId, ownerUserId, mobile, name) {
-  return jwt.sign({ type: 'pro_staff', staffId, ownerUserId, mobile, name }, process.env.JWT_SECRET, { expiresIn: '7d' });
+function issueStaffToken(staffId, ownerUserId, staffUserId, name) {
+  return jwt.sign({ type: 'pro_staff', staffId, ownerUserId, staffUserId, name }, process.env.JWT_SECRET, { expiresIn: '7d' });
 }
 
 // ---------------------------------------------------------------
@@ -107,17 +107,17 @@ async function requireProOrStaffToken(req, res, next) {
     if (decoded.type === 'pro_staff') {
       const { data: staff } = await supabase
         .from('staff_users')
-        .select('id, owner_user_id, name, mobile, status')
+        .select('id, owner_user_id, name, staff_user_id, status')
         .eq('id', decoded.staffId)
         .single();
       if (!staff || staff.status !== 'active') {
         return res.status(403).json({ error: 'This staff account is no longer active.' });
       }
-      req.proMobile = staff.mobile;
       req.proUserId = staff.owner_user_id;
       req.isStaff = true;
       req.staffId = staff.id;
       req.staffName = staff.name;
+      req.staffUserId = staff.staff_user_id;
       return next();
     }
     return res.status(403).json({ error: 'Invalid token type' });
