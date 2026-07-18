@@ -2,7 +2,7 @@ const express = require('express');
 require('dotenv').config();
 
 const supabase = require('../../lib/supabase');
-const { requireProToken } = require('../../middleware/auth');
+const { requireProToken, requireProOrStaffToken } = require('../../middleware/auth');
 const { mirrorContributor, mirrorEditContributor, mirrorDeleteContributor } = require('../../utils/mirrorWrite');
 
 const router = express.Router();
@@ -20,7 +20,7 @@ const router = express.Router();
 // server currently has, skipping any mobile number that's already
 // a contributor rather than creating a duplicate.
 // ---------------------------------------------------------------
-router.post('/web-add-contributors', requireProToken, async (req, res) => {
+router.post('/web-add-contributors', requireProOrStaffToken, async (req, res) => {
   const { contributors: newOnes } = req.body;
   console.log('web-add-contributors called — user:', req.proUserId, 'count:', newOnes?.length);
   if (!Array.isArray(newOnes) || newOnes.length === 0) {

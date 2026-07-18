@@ -2,7 +2,7 @@ const express = require('express');
 require('dotenv').config();
 
 const supabase = require('../../lib/supabase');
-const { requireProWebToken } = require('../../middleware/auth');
+const { requireProOrStaffToken } = require('../../middleware/auth');
 const { computeAmountDue, countUniqueSubscribers, getMaxReceipts, getReceiptUsage } = require('../../lib/pricing');
 const { fetchNormalizedUserData, compareUserData } = require('../../utils/readFromNormalized');
 const { SUPPORTED_CURRENCIES } = require('../../lib/gateways');
@@ -19,7 +19,7 @@ const router = express.Router();
 // the app, so there's a single source of truth — this just adds a
 // properly authenticated read path for the website.
 // ---------------------------------------------------------------
-router.get('/web-dashboard-data', requireProWebToken, async (req, res) => {
+router.get('/web-dashboard-data', requireProOrStaffToken, async (req, res) => {
   try {
     const { data: userData, error } = await supabase
       .from('pro_user_data')
@@ -86,7 +86,17 @@ router.get('/web-dashboard-data', requireProWebToken, async (req, res) => {
       paidSubscriberCount: profileRow?.paid_subscriber_count ?? null
     };
 
-    res.json({ success: true, data: responseData, profile, supportedCurrencies: SUPPORTED_CURRENCIES });
+    res.json({
+      success: true,
+      data: responseData,
+      profile,
+      supportedCurrencies: SUPPORTED_CURRENCIES,
+      // Lets the frontend re-derive role/name after a fresh page load even
+      // if sessionStorage was cleared for some reason — never trusted for
+      // authorization itself, every write endpoint re-checks the token.
+      role: req.isStaff ? 'staff' : 'owner',
+      staffName: req.isStaff ? req.staffName : null
+    });
 
     // Ongoing monitoring — runs AFTER the response is already sent. Now that
     // we're serving from the new tables, this checks the old JSON still

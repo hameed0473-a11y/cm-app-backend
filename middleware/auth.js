@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
+const supabase = require('../lib/supabase');
+
 // ---------------------------------------------------------------
 // Admin auth middleware — moved unchanged from routes/auth.js.
 // ---------------------------------------------------------------
@@ -67,4 +69,61 @@ function issueProAppToken(userId, mobile) {
   return jwt.sign({ type: 'pro_app', userId, mobile }, process.env.JWT_SECRET, { expiresIn: '90d' });
 }
 
-module.exports = { requireAdmin, requireProWebToken, requireProToken, issueProAppToken };
+function issueStaffToken(staffId, ownerUserId, mobile, name) {
+  return jwt.sign({ type: 'pro_staff', staffId, ownerUserId, mobile, name }, process.env.JWT_SECRET, { expiresIn: '7d' });
+}
+
+// ---------------------------------------------------------------
+// STAFF-AWARE auth — deliberately opt-in, route by route. Every
+// existing requireProToken/requireProWebToken call site keeps
+// rejecting `pro_staff` tokens exactly as before (their type checks
+// only ever matched 'pro_app'/'pro_web'), so a staff account is
+// default-denied everywhere. Only the handful of endpoints a staff
+// member is actually allowed to use (dashboard read, add contributor,
+// subscribe-to-goal, collect payment) should use this instead.
+//
+// Sets req.proUserId to the OWNER's id in both cases, so downstream
+// handlers keep reading/writing the owner's pro_user_data exactly as
+// they do today — a staff member always operates on their owner's
+// data, never their own. req.isStaff / req.staffId / req.staffName
+// let a handler attribute an action (e.g. collectedBy on a receipt)
+// to the actual staff member.
+//
+// Staff status is re-checked against the DB on every request (not
+// just trusted from the JWT) so disabling/removing a staff account
+// takes effect immediately, not just at their next login.
+// ---------------------------------------------------------------
+async function requireProOrStaffToken(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.type === 'pro_web' || decoded.type === 'pro_app') {
+      req.proMobile = decoded.mobile;
+      req.proUserId = decoded.userId;
+      req.isStaff = false;
+      return next();
+    }
+    if (decoded.type === 'pro_staff') {
+      const { data: staff } = await supabase
+        .from('staff_users')
+        .select('id, owner_user_id, name, mobile, status')
+        .eq('id', decoded.staffId)
+        .single();
+      if (!staff || staff.status !== 'active') {
+        return res.status(403).json({ error: 'This staff account is no longer active.' });
+      }
+      req.proMobile = staff.mobile;
+      req.proUserId = staff.owner_user_id;
+      req.isStaff = true;
+      req.staffId = staff.id;
+      req.staffName = staff.name;
+      return next();
+    }
+    return res.status(403).json({ error: 'Invalid token type' });
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+module.exports = { requireAdmin, requireProWebToken, requireProToken, requireProOrStaffToken, issueProAppToken, issueStaffToken };

@@ -2,7 +2,7 @@ const express = require('express');
 require('dotenv').config();
 
 const supabase = require('../../lib/supabase');
-const { requireProToken } = require('../../middleware/auth');
+const { requireProToken, requireProOrStaffToken } = require('../../middleware/auth');
 const { getDefaultBreakup, getRemainingBreakup, breakupTotal } = require('../../utils/arrears');
 const { getMaxReceipts, getReceiptUsage } = require('../../lib/pricing');
 const { mirrorContribution, mirrorPledge, mirrorArchiveTarget } = require('../../utils/mirrorWrite');
@@ -55,7 +55,7 @@ async function markTargetCompletedIfNeeded(supabase, userId, targets, targetId) 
 // most recently. Fetching immediately before writing narrows (though
 // doesn't perfectly eliminate) that race window.
 // ---------------------------------------------------------------
-router.post('/web-collect-payment', requireProToken, async (req, res) => {
+router.post('/web-collect-payment', requireProOrStaffToken, async (req, res) => {
   const { contributorId, targetId, targetCategory, amount } = req.body;
   console.log('web-collect-payment called — user:', req.proUserId, 'contributor:', contributorId, 'target:', targetId, 'amount:', amount);
   if (!contributorId || !targetId || !amount) {
@@ -77,11 +77,19 @@ router.post('/web-collect-payment', requireProToken, async (req, res) => {
     // goal-subscription limits anymore.
     const { data: proUserRow } = await supabase
       .from('pro_users')
-      .select('paid_subscriber_count, receipts_per_subscriber, total_receipts_generated')
+      .select('name, paid_subscriber_count, receipts_per_subscriber, total_receipts_generated')
       .eq('id', req.proUserId)
       .single();
     const maxReceipts = getMaxReceipts(proUserRow?.paid_subscriber_count, proUserRow?.receipts_per_subscriber);
     const usageBeforeThis = getReceiptUsage(proUserRow?.total_receipts_generated, maxReceipts);
+
+    // Who actually collected this — the owner themselves, or a staff member
+    // acting on their behalf. Persisted onto the contribution/pledge record
+    // itself (not just used for the immediate receipt download) so the
+    // audit trail is correct even if the receipt is regenerated later by
+    // someone else.
+    const collectorName = req.isStaff ? req.staffName : (proUserRow?.name || 'Pro Web Dashboard');
+    const collectorId = req.isStaff ? req.staffId : req.proUserId;
 
     if (usageBeforeThis.isBlocked) {
       return res.status(403).json({
@@ -113,7 +121,9 @@ router.post('/web-collect-payment', requireProToken, async (req, res) => {
         amountPaid: newAmountPaid,
         status: newAmountPaid >= p.promisedAmount ? 'fully_paid' : 'partially_paid',
         lastPaymentDate: new Date().toISOString(),
-        lastReceiptNo: receiptNo
+        lastReceiptNo: receiptNo,
+        collectedBy: collectorName,
+        collectedById: collectorId
       };
 
       const { error: updateError } = await supabase
@@ -166,7 +176,8 @@ router.post('/web-collect-payment', requireProToken, async (req, res) => {
         targetId,
         amountPaid: Number(amount),
         date: new Date().toISOString(),
-        collectedBy: 'Web Dashboard',
+        collectedBy: collectorName,
+        collectedById: collectorId,
         receiptNo
       };
       contributions.push(newContribution);
@@ -207,7 +218,7 @@ router.post('/web-collect-payment', requireProToken, async (req, res) => {
     const receiptUsage = getReceiptUsage(newTotal, maxReceipts);
 
     console.log('web-collect-payment success — user:', req.proUserId, 'receipt:', receiptNo);
-    res.json({ success: true, receiptNo, receiptUsage });
+    res.json({ success: true, receiptNo, receiptUsage, collectedBy: collectorName, collectedById: collectorId });
   } catch (err) {
     console.error('Web collect payment error:', err?.message || err);
     res.status(500).json({ error: 'Failed to record payment.' });

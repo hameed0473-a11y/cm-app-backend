@@ -23,6 +23,7 @@ async function mirrorContribution(supabase, userId, contribution) {
       amount_paid: contribution.amountPaid,
       paid_at: contribution.date ? new Date(contribution.date).toISOString() : new Date().toISOString(),
       collected_by: contribution.collectedBy || null,
+      collected_by_id: contribution.collectedById || null,
       receipt_no: contribution.receiptNo || null,
       deleted: !!contribution.deleted
     }], { onConflict: 'id' });
@@ -47,6 +48,8 @@ async function mirrorPledge(supabase, userId, pledge) {
       created_at: pledge.createdAt ? new Date(pledge.createdAt).toISOString() : new Date().toISOString(),
       last_payment_date: pledge.lastPaymentDate ? new Date(pledge.lastPaymentDate).toISOString() : null,
       last_receipt_no: pledge.lastReceiptNo || null,
+      collected_by: pledge.collectedBy || null,
+      collected_by_id: pledge.collectedById || null,
       deleted: !!pledge.deleted,
       deleted_at: pledge.deletedAt ? new Date(pledge.deletedAt).toISOString() : null,
       deleted_payments: pledge.deletedPayments || null
@@ -227,7 +230,7 @@ async function mirrorFullSyncBatch(supabase, userId, { contributors = [], target
         contributor_id: validContributorIds.has(c.contributorId) ? c.contributorId : null,
         target_id: c.targetId, amount_paid: c.amountPaid,
         paid_at: c.date ? new Date(c.date).toISOString() : new Date().toISOString(),
-        collected_by: c.collectedBy || null, receipt_no: c.receiptNo || null, deleted: !!c.deleted
+        collected_by: c.collectedBy || null, collected_by_id: c.collectedById || null, receipt_no: c.receiptNo || null, deleted: !!c.deleted
       }));
       const { error } = await supabase.from('contributions').upsert(rows, { onConflict: 'id' });
       if (error) console.warn('[mirror] sync contributions batch skipped:', error.message);
@@ -243,6 +246,7 @@ async function mirrorFullSyncBatch(supabase, userId, { contributors = [], target
         created_at: p.createdAt ? new Date(p.createdAt).toISOString() : new Date().toISOString(),
         last_payment_date: p.lastPaymentDate ? new Date(p.lastPaymentDate).toISOString() : null,
         last_receipt_no: p.lastReceiptNo || null,
+        collected_by: p.collectedBy || null, collected_by_id: p.collectedById || null,
         deleted: !!p.deleted,
         deleted_at: p.deletedAt ? new Date(p.deletedAt).toISOString() : null,
         deleted_payments: p.deletedPayments || null
