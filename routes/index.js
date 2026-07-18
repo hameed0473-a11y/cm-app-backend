@@ -22,5 +22,6 @@ router.use(require('./adminStats'));     // /admin-stats
 router.use(require('./adminTickets'));   // /admin-tickets, /admin-resolve-ticket
 router.use(require('./adminSubscriptions')); // /admin-find-subscriber, /admin-extend-subscription
 router.use(require('./misc'));           // /visitor
+router.use(require('./pledgeQr'));       // /pledge-qr-info, /pledge-qr-lookup, /pledge-qr-new-pledge, /pledge-qr-pay-existing, /pledge-qr-anonymous-pay
 
 module.exports = router;
