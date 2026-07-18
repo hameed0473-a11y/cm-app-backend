@@ -166,6 +166,13 @@ router.post('/web-set-profile', requireProToken, async (req, res) => {
 // to a goal, and collect payments — never delete a payment or a goal,
 // never touch settings/billing/integrations/staff management itself.
 //
+// Staff log in through their own separate screen (/web-staff-login),
+// never the owner's mobile+password form. Their login id is fixed and
+// system-generated — "<owner's pro_users.id>.<2-digit sequence>" — not
+// something they choose, and not their mobile number. The sequence is
+// tracked per-owner on pro_users.staff_seq so ids stay stable and never
+// collide even if a staff account is later removed.
+//
 // requireProWebToken (not requireProToken) on purpose: managing staff
 // is an owner-web-dashboard action only, and it also automatically
 // rejects any pro_staff token, so a staff account can never manage
@@ -174,33 +181,50 @@ router.post('/web-set-profile', requireProToken, async (req, res) => {
 
 router.post('/web-add-staff', requireProWebToken, async (req, res) => {
   const name = String(req.body.name || '').trim();
+  const email = String(req.body.email || '').trim().toLowerCase();
   const mobile = String(req.body.mobile || '').trim();
   const password = req.body.password || '';
 
-  if (!name || !mobile || !password) {
-    return res.status(400).json({ error: 'name, mobile, and password are all required.' });
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: 'name, email, and password are all required.' });
+  }
+  if (!/^\S+@\S+\.\S+$/.test(email)) {
+    return res.status(400).json({ error: 'Please enter a valid email address.' });
   }
   if (password.length < 6) {
     return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   }
 
   try {
-    // Mobile numbers are unique across owner and staff logins, since both
-    // share the same /web-login form — check both tables before inserting.
-    const { data: existingOwner } = await supabase.from('users').select('id').eq('mobile', mobile).single();
-    if (existingOwner) {
-      return res.status(400).json({ error: 'This mobile number is already registered to an account.' });
-    }
-    const { data: existingStaff } = await supabase.from('staff_users').select('id').eq('mobile', mobile).single();
-    if (existingStaff) {
-      return res.status(400).json({ error: 'This mobile number is already registered to a staff account.' });
+    // Atomically-ish claim the next 2-digit sequence number for this owner —
+    // fetch-then-increment, same pattern the rest of this codebase already
+    // uses for its fetch-fresh-then-write-back writes. A single owner adding
+    // staff one at a time (the only realistic usage) never races this.
+    const { data: ownerRow } = await supabase
+      .from('pro_users')
+      .select('staff_seq')
+      .eq('id', req.proUserId)
+      .single();
+    const nextSeq = (ownerRow?.staff_seq || 0) + 1;
+    const staffUserId = `${req.proUserId}.${String(nextSeq).padStart(2, '0')}`;
+
+    const { error: seqError } = await supabase
+      .from('pro_users')
+      .update({ staff_seq: nextSeq })
+      .eq('id', req.proUserId);
+    if (seqError) {
+      console.error('web-add-staff staff_seq error:', seqError.message);
+      return res.status(500).json({ error: 'Could not create the staff account.' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const { data: newStaff, error } = await supabase
       .from('staff_users')
-      .insert([{ owner_user_id: req.proUserId, name, mobile, password: hashedPassword, status: 'active' }])
-      .select('id, name, mobile, status, created_at')
+      .insert([{
+        owner_user_id: req.proUserId, name, email, mobile: mobile || null,
+        staff_user_id: staffUserId, password: hashedPassword, status: 'active'
+      }])
+      .select('id, name, email, mobile, staff_user_id, status, created_at')
       .single();
 
     if (error) {
@@ -219,7 +243,7 @@ router.get('/web-list-staff', requireProWebToken, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('staff_users')
-      .select('id, name, mobile, status, created_at, last_login_at')
+      .select('id, name, email, mobile, staff_user_id, status, created_at, last_login_at')
       .eq('owner_user_id', req.proUserId)
       .order('created_at', { ascending: true });
 
