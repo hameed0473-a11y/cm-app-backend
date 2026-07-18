@@ -3,6 +3,8 @@ require('dotenv').config();
 
 const supabase = require('../../lib/supabase');
 const { requireProToken } = require('../../middleware/auth');
+const { encrypt, decrypt } = require('../../utils/cryptoVault');
+const { maskAccountNumber } = require('../../utils/gatewayValidation');
 
 const router = express.Router();
 
@@ -122,8 +124,10 @@ router.post('/web-delete-expense', requireProToken, async (req, res) => {
 // --- Add a payee ---
 router.post('/web-add-payee', requireProToken, async (req, res) => {
   const name = String(req.body.name || '').trim();
-  const mobile = String(req.body.mobile || '').trim();
-  const address = String(req.body.address || '').trim();
+  const bankAccountNumber = String(req.body.bankAccountNumber || '').trim();
+  const bankName = String(req.body.bankName || '').trim();
+  const ifscCode = String(req.body.ifscCode || '').trim();
+  const merchantId = String(req.body.merchantId || '').trim();
 
   if (!name) return res.status(400).json({ error: 'Payee name is required.' });
 
@@ -132,8 +136,13 @@ router.post('/web-add-payee', requireProToken, async (req, res) => {
       id: `PAYEE-${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 10)}`,
       user_id: req.proUserId,
       name,
-      mobile: mobile || null,
-      address: address || null,
+      // Encrypted at rest, same scheme already used for the platform's
+      // own bank details and every gateway secret in this app — never
+      // stored or returned in plain text.
+      bank_account_number_enc: bankAccountNumber ? encrypt(bankAccountNumber) : null,
+      bank_name: bankName || null,
+      ifsc_code: ifscCode || null,
+      merchant_id: merchantId || null,
       created_at: new Date().toISOString()
     };
 
@@ -143,19 +152,26 @@ router.post('/web-add-payee', requireProToken, async (req, res) => {
       return res.status(500).json({ error: 'Could not save this payee.' });
     }
 
-    res.json({ success: true, payee });
+    res.json({
+      success: true,
+      payee: {
+        id: payee.id, name, bankAccountMasked: maskAccountNumber(bankAccountNumber),
+        bankName: payee.bank_name, ifscCode: payee.ifsc_code, merchantId: payee.merchant_id
+      }
+    });
   } catch (err) {
     console.error('web-add-payee error:', err?.message || err);
     res.status(500).json({ error: 'Server error. Please try again.' });
   }
 });
 
-// --- List all payees ---
+// --- List all payees — bank account is always masked (last 4 digits),
+// the actual number is never returned to the browser. ---
 router.get('/web-payees', requireProToken, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('payees')
-      .select('id, name, mobile, address, created_at')
+      .select('id, name, bank_account_number_enc, bank_name, ifsc_code, merchant_id, created_at')
       .eq('user_id', req.proUserId)
       .order('name', { ascending: true });
 
@@ -164,7 +180,16 @@ router.get('/web-payees', requireProToken, async (req, res) => {
       return res.status(500).json({ error: 'Could not load payees.' });
     }
 
-    res.json({ success: true, payees: data || [] });
+    const payees = (data || []).map(p => ({
+      id: p.id,
+      name: p.name,
+      bankAccountMasked: p.bank_account_number_enc ? maskAccountNumber(decrypt(p.bank_account_number_enc)) : null,
+      bankName: p.bank_name,
+      ifscCode: p.ifsc_code,
+      merchantId: p.merchant_id
+    }));
+
+    res.json({ success: true, payees });
   } catch (err) {
     console.error('web-payees error:', err?.message || err);
     res.status(500).json({ error: 'Server error. Please try again.' });
