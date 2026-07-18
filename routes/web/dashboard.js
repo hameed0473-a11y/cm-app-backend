@@ -95,7 +95,10 @@ router.get('/web-dashboard-data', requireProOrStaffToken, async (req, res) => {
       // if sessionStorage was cleared for some reason — never trusted for
       // authorization itself, every write endpoint re-checks the token.
       role: req.isStaff ? 'staff' : 'owner',
-      staffName: req.isStaff ? req.staffName : null
+      staffName: req.isStaff ? req.staffName : null,
+      // The OWNER's id, even for a staff session — needed client-side to
+      // build the public pledge-QR payment URL (/pledge-pay/:proUserId/:targetId).
+      proUserId: req.proUserId
     });
 
     // Ongoing monitoring — runs AFTER the response is already sent. Now that

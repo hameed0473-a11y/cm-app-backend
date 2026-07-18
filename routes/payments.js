@@ -230,8 +230,13 @@ function recordOnlineContribution(notes, rupees) {
 
       if (targetCategory === 'event') {
         const pledges = userData.pledges || [];
+        // Pledge-QR flows (see routes/pledgeQr.js) pass the pledge's own `id`
+        // through as `contributorId` — necessary once more than one pledge on
+        // the same goal can share a mobile number (every anonymous donation
+        // uses the same fixed placeholder mobile), so matching by mobile
+        // alone would be ambiguous.
         const idx = pledges.findIndex(p =>
-          p.targetId === targetId && (p.contributorId === contributorId || p.mobile === mobile)
+          p.targetId === targetId && (p.id === contributorId || p.contributorId === contributorId || p.mobile === mobile)
         );
         if (idx === -1) {
           console.error('Online payment: pledge not found for', contributorId, mobile, targetId);
