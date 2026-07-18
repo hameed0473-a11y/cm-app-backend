@@ -2,7 +2,7 @@ const express = require('express');
 require('dotenv').config();
 
 const supabase = require('../../lib/supabase');
-const { requireProToken } = require('../../middleware/auth');
+const { requireProToken, requireProOrStaffToken } = require('../../middleware/auth');
 const {
   mirrorTarget, mirrorArchiveTarget, mirrorSubscription, mirrorDeleteSubscription
 } = require('../../utils/mirrorWrite');
@@ -79,7 +79,7 @@ router.post('/web-create-target', requireProToken, async (req, res) => {
 // /web-add-contributors: the app may have changed this contributor's data
 // since the website last loaded it.
 // ---------------------------------------------------------------
-router.post('/web-subscribe-contributors', requireProToken, async (req, res) => {
+router.post('/web-subscribe-contributors', requireProOrStaffToken, async (req, res) => {
   const { targetId, subscriptions } = req.body;
   if (!targetId) return res.status(400).json({ error: 'targetId is required' });
   if (!Array.isArray(subscriptions) || subscriptions.length === 0) {

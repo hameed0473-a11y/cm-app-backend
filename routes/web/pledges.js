@@ -2,7 +2,7 @@ const express = require('express');
 require('dotenv').config();
 
 const supabase = require('../../lib/supabase');
-const { requireProToken } = require('../../middleware/auth');
+const { requireProOrStaffToken } = require('../../middleware/auth');
 const { mirrorPledge } = require('../../utils/mirrorWrite');
 
 const router = express.Router();
@@ -18,7 +18,7 @@ const router = express.Router();
 // is a promise-to-pay record, separate from the contributors/contributions
 // arrays, so it gets its own array + its own fetch-fresh-then-append write.
 // ---------------------------------------------------------------
-router.post('/web-create-pledge', requireProToken, async (req, res) => {
+router.post('/web-create-pledge', requireProOrStaffToken, async (req, res) => {
   const { targetId, name, mobile, promisedAmount, contributorId } = req.body;
   if (!targetId || !name || !mobile || !promisedAmount) {
     return res.status(400).json({ error: 'targetId, name, mobile, and promisedAmount are required' });

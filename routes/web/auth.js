@@ -8,6 +8,7 @@ const { rateLimit } = require('../../middleware/rateLimit');
 const { checkBruteForce } = require('../../middleware/bruteForce');
 const { createAndSendEmailOtp, wasOtpVerified } = require('../../utils/otpAuth');
 const { computeAmountDue, countUniqueSubscribers } = require('../../lib/pricing');
+const { issueStaffToken } = require('../../middleware/auth');
 
 const router = express.Router();
 
@@ -51,7 +52,40 @@ router.post('/web-login', rateLimit(10, 15 * 60000), async (req, res) => {
       .single();
 
     if (error || !data) {
-      return res.status(404).json({ error: 'No account found for this mobile number' });
+      // Not an owner account — check whether this mobile belongs to a
+      // staff account instead (staff share this same login form; mobile
+      // numbers are unique across both tables). No device/email-OTP
+      // challenge for staff — that flow exists to protect the owner's
+      // billing/settings surface, which staff can never reach anyway.
+      const { data: staff } = await supabase
+        .from('staff_users')
+        .select('id, owner_user_id, name, mobile, password, status')
+        .eq('mobile', mobile)
+        .single();
+
+      if (!staff) {
+        return res.status(404).json({ error: 'No account found for this mobile number' });
+      }
+      if (staff.status !== 'active') {
+        return res.status(403).json({ error: 'This staff account has been disabled. Contact your admin.' });
+      }
+
+      const staffMatch = staff.password.startsWith('$2')
+        ? await bcrypt.compare(password, staff.password)
+        : staff.password === password;
+      if (!staffMatch) {
+        return res.status(401).json({ error: 'Incorrect mobile number or password' });
+      }
+
+      await supabase.from('staff_users').update({ last_login_at: new Date().toISOString() }).eq('id', staff.id);
+
+      const staffToken = issueStaffToken(staff.id, staff.owner_user_id, staff.mobile, staff.name);
+      return res.json({
+        success: true,
+        token: staffToken,
+        role: 'staff',
+        user: { name: staff.name, mobile: staff.mobile }
+      });
     }
     if (!data.password) {
       return res.status(400).json({ error: 'Password not set for this account' });
@@ -144,6 +178,7 @@ router.post('/web-login', rateLimit(10, 15 * 60000), async (req, res) => {
     res.json({
       success: true,
       token,
+      role: 'owner',
       user: { name: data.username, mobile: data.mobile }
     });
   } catch (err) {
@@ -319,7 +354,7 @@ router.post('/web-register-verify', rateLimit(10, 15 * 60000), async (req, res) 
       { expiresIn: '7d' }
     );
 
-    res.json({ success: true, token, user: { name: proUser.name, mobile: proUser.mobile } });
+    res.json({ success: true, token, role: 'owner', user: { name: proUser.name, mobile: proUser.mobile } });
   } catch (err) {
     console.error('web-register-verify error:', err?.message || err);
     res.status(500).json({ error: 'Server error. Please try again.' });
@@ -369,7 +404,7 @@ router.post('/web-login-verify', rateLimit(10, 15 * 60000), async (req, res) => 
       { expiresIn: '7d' }
     );
 
-    res.json({ success: true, token, user: { name: userRow?.username || '', mobile: proUser.mobile } });
+    res.json({ success: true, token, role: 'owner', user: { name: userRow?.username || '', mobile: proUser.mobile } });
   } catch (err) {
     console.error('web-login-verify error:', err?.message || err);
     res.status(500).json({ error: 'Server error. Please try again.' });

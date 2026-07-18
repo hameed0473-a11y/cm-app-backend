@@ -1,8 +1,9 @@
 const express = require('express');
 require('dotenv').config();
 
+const bcrypt = require('bcryptjs');
 const supabase = require('../../lib/supabase');
-const { requireProToken } = require('../../middleware/auth');
+const { requireProToken, requireProWebToken } = require('../../middleware/auth');
 const { encrypt } = require('../../utils/cryptoVault');
 
 const router = express.Router();
@@ -157,5 +158,117 @@ router.post('/web-set-profile', requireProToken, async (req, res) => {
   }
 });
 
+
+// ===============================================================
+// STAFF ACCOUNTS — owner-only. A staff account is a limited-access
+// login (see requireProOrStaffToken in middleware/auth.js) that can
+// only read the dashboard, add contributors, subscribe contributors
+// to a goal, and collect payments — never delete a payment or a goal,
+// never touch settings/billing/integrations/staff management itself.
+//
+// requireProWebToken (not requireProToken) on purpose: managing staff
+// is an owner-web-dashboard action only, and it also automatically
+// rejects any pro_staff token, so a staff account can never manage
+// other staff or itself.
+// ===============================================================
+
+router.post('/web-add-staff', requireProWebToken, async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const mobile = String(req.body.mobile || '').trim();
+  const password = req.body.password || '';
+
+  if (!name || !mobile || !password) {
+    return res.status(400).json({ error: 'name, mobile, and password are all required.' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  }
+
+  try {
+    // Mobile numbers are unique across owner and staff logins, since both
+    // share the same /web-login form — check both tables before inserting.
+    const { data: existingOwner } = await supabase.from('users').select('id').eq('mobile', mobile).single();
+    if (existingOwner) {
+      return res.status(400).json({ error: 'This mobile number is already registered to an account.' });
+    }
+    const { data: existingStaff } = await supabase.from('staff_users').select('id').eq('mobile', mobile).single();
+    if (existingStaff) {
+      return res.status(400).json({ error: 'This mobile number is already registered to a staff account.' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const { data: newStaff, error } = await supabase
+      .from('staff_users')
+      .insert([{ owner_user_id: req.proUserId, name, mobile, password: hashedPassword, status: 'active' }])
+      .select('id, name, mobile, status, created_at')
+      .single();
+
+    if (error) {
+      console.error('web-add-staff error:', error.message);
+      return res.status(500).json({ error: 'Could not create the staff account.' });
+    }
+
+    res.json({ success: true, staff: newStaff });
+  } catch (err) {
+    console.error('web-add-staff error:', err?.message || err);
+    res.status(500).json({ error: 'Could not create the staff account.' });
+  }
+});
+
+router.get('/web-list-staff', requireProWebToken, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('staff_users')
+      .select('id, name, mobile, status, created_at, last_login_at')
+      .eq('owner_user_id', req.proUserId)
+      .order('created_at', { ascending: true });
+
+    if (error) return res.status(500).json({ error: 'Could not load staff accounts.' });
+    res.json({ success: true, staff: data || [] });
+  } catch (err) {
+    console.error('web-list-staff error:', err?.message || err);
+    res.status(500).json({ error: 'Could not load staff accounts.' });
+  }
+});
+
+router.post('/web-toggle-staff', requireProWebToken, async (req, res) => {
+  const { staffId, status } = req.body;
+  if (!staffId || !['active', 'disabled'].includes(status)) {
+    return res.status(400).json({ error: 'staffId and a valid status are required.' });
+  }
+  try {
+    const { data, error } = await supabase
+      .from('staff_users')
+      .update({ status })
+      .eq('id', staffId)
+      .eq('owner_user_id', req.proUserId)
+      .select('id')
+      .single();
+
+    if (error || !data) return res.status(404).json({ error: 'Staff account not found.' });
+    res.json({ success: true, staffId, status });
+  } catch (err) {
+    console.error('web-toggle-staff error:', err?.message || err);
+    res.status(500).json({ error: 'Could not update the staff account.' });
+  }
+});
+
+router.post('/web-remove-staff', requireProWebToken, async (req, res) => {
+  const { staffId } = req.body;
+  if (!staffId) return res.status(400).json({ error: 'staffId is required.' });
+  try {
+    const { error } = await supabase
+      .from('staff_users')
+      .delete()
+      .eq('id', staffId)
+      .eq('owner_user_id', req.proUserId);
+
+    if (error) return res.status(500).json({ error: 'Could not remove the staff account.' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('web-remove-staff error:', err?.message || err);
+    res.status(500).json({ error: 'Could not remove the staff account.' });
+  }
+});
 
 module.exports = router;

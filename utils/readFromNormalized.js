@@ -86,6 +86,7 @@ async function fetchNormalizedUserData(supabase, userId) {
     amountPaid: Number(c.amount_paid),
     date: c.paid_at,
     collectedBy: c.collected_by || undefined,
+    collectedById: c.collected_by_id || undefined,
     receiptNo: c.receipt_no || undefined,
     deleted: c.deleted || undefined
   }));
@@ -103,6 +104,8 @@ async function fetchNormalizedUserData(supabase, userId) {
     contributorId: p.contributor_id || undefined,
     lastPaymentDate: p.last_payment_date || undefined,
     lastReceiptNo: p.last_receipt_no || undefined,
+    collectedBy: p.collected_by || undefined,
+    collectedById: p.collected_by_id || undefined,
     deleted: p.deleted || undefined,
     deletedAt: p.deleted_at || undefined,
     deletedPayments: p.deleted_payments || undefined
