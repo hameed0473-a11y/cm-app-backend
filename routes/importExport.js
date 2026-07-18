@@ -211,4 +211,66 @@ router.post('/import-goals', async (req, res) => {
   }
 });
 
+// ===============================================================
+// IMPORT PAYEES FROM EXCEL — parsing only, same pattern as
+// import-contributors/import-goals above: this endpoint just reads the
+// file and returns structured rows. It does NOT touch the database —
+// the frontend takes the parsed rows and calls the already-authenticated
+// /web-add-payee for each one (which dedupes by mobile automatically),
+// same separation of concerns as the goal-import flow.
+// ===============================================================
+router.post('/import-payees', async (req, res) => {
+  const { fileBase64 } = req.body;
+
+  if (!fileBase64) {
+    return res.status(400).json({ error: 'fileBase64 is required' });
+  }
+
+  try {
+    const buffer = Buffer.from(fileBase64, 'base64');
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ error: 'File is empty or has no data.' });
+    }
+
+    const firstRow = rows[0];
+    const keys = Object.keys(firstRow);
+    const nameKey = keys.find(k => k.toLowerCase().includes('name'));
+    const mobileKey = keys.find(k =>
+      k.toLowerCase().includes('mobile') ||
+      k.toLowerCase().includes('phone') ||
+      k.toLowerCase().includes('number')
+    );
+    const categoryKey = keys.find(k => k.toLowerCase().includes('category'));
+
+    if (!nameKey || !mobileKey || !categoryKey) {
+      return res.status(400).json({
+        error: 'Could not find Name, Mobile Number, and Category columns. Please check your file\'s header row.'
+      });
+    }
+
+    const payees = [];
+    rows.forEach(row => {
+      const name = String(row[nameKey] || '').trim();
+      const mobile = String(row[mobileKey] || '').replace(/\D/g, '');
+      const category = String(row[categoryKey] || '').trim();
+      if (!name || !mobile || !category) return; // skip incomplete rows silently — summarized by the frontend as "skipped"
+      payees.push({ name, mobile, category });
+    });
+
+    if (payees.length === 0) {
+      return res.status(400).json({ error: 'No valid rows found — each row needs a Name, a Mobile Number, and a Category.' });
+    }
+
+    res.json({ success: true, payees });
+  } catch (err) {
+    console.error('import-payees error:', err?.message || err);
+    res.status(500).json({ error: 'Could not read this file. Please check the format and try again.' });
+  }
+});
+
 module.exports = router;
