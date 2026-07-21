@@ -5,7 +5,7 @@ const supabase = require('../lib/supabase');
 const razorpay = require('../lib/razorpay');
 const gateways = require('../lib/gateways');
 const { rateLimit } = require('../middleware/rateLimit');
-const { requireAdmin, requireProToken, issueProAppToken } = require('../middleware/auth');
+const { requireAdmin, requireProToken, requireProOrStaffToken, issueProAppToken, issueStaffToken } = require('../middleware/auth');
 const { checkBruteForce, recordFailedAttempt, clearBruteForce } = require('../middleware/bruteForce');
 const { getDefaultBreakup, getRemainingBreakup, breakupTotal } = require('../utils/arrears');
 const { mirrorContribution, mirrorPledge, mirrorFullSyncBatch } = require('../utils/mirrorWrite');
@@ -580,6 +580,105 @@ router.post('/pro/login', async (req, res) => {
 });
 
 // ---------------------------------------------------------------
+// PRO STAFF LOGIN — the mobile counterpart of routes/web/auth.js's
+// /web-staff-login. Staff accounts are only ever created from the web
+// dashboard (see /web-add-staff in routes/web/settings.js) — this
+// endpoint just lets an already-created staff member sign into the
+// mobile app with the same Staff ID ("<owner id>.<seq>") + password
+// they use on the web. A staff member always operates on their
+// OWNER's cloud data, never their own, so this hands back the SAME
+// shape /pro/login returns (user/data/proSyncToken/trialInfo) but
+// built from the owner's row — the app's existing mobile-keyed local
+// storage and sync calls work unmodified once role is 'collector'.
+// No device/email-OTP challenge, matching the web staff-login design.
+// ---------------------------------------------------------------
+router.post('/pro/staff-login', rateLimit(10, 15 * 60000), async (req, res) => {
+  const staffUserId = String(req.body.staffUserId || '').trim();
+  const password = req.body.password || '';
+
+  if (!staffUserId || !password) {
+    return res.status(400).json({ error: 'Staff ID and password are required.' });
+  }
+
+  const bruteKey = `pro-staff-login:${staffUserId}`;
+  const bruteCheck = checkBruteForce(bruteKey, 5, 30 * 60000);
+  if (bruteCheck.blocked) {
+    return res.status(429).json({ error: bruteCheck.message });
+  }
+
+  try {
+    const { data: staff, error } = await supabase
+      .from('staff_users')
+      .select('id, owner_user_id, name, email, staff_user_id, password, status')
+      .eq('staff_user_id', staffUserId)
+      .single();
+
+    if (error || !staff) {
+      recordFailedAttempt(bruteKey, 5, 30 * 60000);
+      return res.status(404).json({ error: 'No staff account found for this Staff ID.' });
+    }
+    if (staff.status !== 'active') {
+      return res.status(403).json({ error: 'This staff account has been disabled. Contact your admin.' });
+    }
+
+    const isMatch = staff.password.startsWith('$2')
+      ? await bcrypt.compare(password, staff.password)
+      : staff.password === password;
+    if (!isMatch) {
+      recordFailedAttempt(bruteKey, 5, 30 * 60000);
+      return res.status(401).json({ error: 'Incorrect Staff ID or password.' });
+    }
+    clearBruteForce(bruteKey);
+
+    const { data: owner, error: ownerErr } = await supabase
+      .from('pro_users')
+      .select('id, mobile, joined_at, currency, subscription_expires_at')
+      .eq('id', staff.owner_user_id)
+      .single();
+    if (ownerErr || !owner) return res.status(404).json({ error: 'Could not find the account this Staff ID belongs to.' });
+
+    const isExpired = owner.subscription_expires_at && new Date(owner.subscription_expires_at) < new Date();
+    if (isExpired) {
+      return res.status(403).json({
+        error: 'Your admin’s Pro subscription has expired. Ask them to renew from the web dashboard.',
+        code: 'SUBSCRIPTION_EXPIRED'
+      });
+    }
+
+    await supabase.from('staff_users').update({ last_login_at: new Date().toISOString() }).eq('id', staff.id);
+
+    let responseData = { contributors: [], targets: [], contributions: [], pledges: [] };
+    try {
+      responseData = await fetchNormalizedUserData(supabase, owner.id);
+    } catch (err) {
+      console.warn('[cutover] new-table read failed on pro/staff-login, falling back to old JSON:', err?.message || err);
+      const { data: userData } = await supabase.from('pro_user_data').select('*').eq('user_id', owner.id).single();
+      responseData = userData || responseData;
+    }
+
+    const safeUser = {
+      id: owner.id,
+      name: staff.name,
+      mobile: owner.mobile,
+      email: staff.email || '',
+      role: 'collector',
+      tier: 'pro',
+      staffUserId: staff.staff_user_id,
+      joinedAt: owner.joined_at,
+      lastLoginAt: new Date().toISOString(),
+      subscriptionExpiresAt: owner.subscription_expires_at
+    };
+
+    const token = issueStaffToken(staff.id, owner.id, staff.staff_user_id, staff.name, owner.mobile);
+
+    res.json({ success: true, user: safeUser, data: responseData, proSyncToken: token });
+  } catch (err) {
+    console.error('Pro staff login error:', err?.message || err);
+    res.status(500).json({ error: 'Internal server error occurred.' });
+  }
+});
+
+// ---------------------------------------------------------------
 // FORGOT PASSWORD — replaces the old "reveal the plaintext password"
 // mobile-app flow. The account's registered email is looked up
 // server-side and never sent back to the client (only a masked
@@ -695,7 +794,7 @@ router.post('/pro/forgot-password-reset', rateLimit(10, 10 * 60000), async (req,
 });
 
 // PRO SYNC SAVE — saves user's latest data to cloud
-router.post('/pro/sync', requireProToken, async (req, res) => {
+router.post('/pro/sync', requireProOrStaffToken, async (req, res) => {
   const { userId, mobile, contributors, targets, contributions, pledges } = req.body;
 
   if (!userId && !mobile) {
@@ -704,7 +803,10 @@ router.post('/pro/sync', requireProToken, async (req, res) => {
   // The token's identity must match whichever identity is being written to.
   // Without this check, a valid token for YOUR account could still be used
   // to overwrite someone else's data just by changing the mobile/userId
-  // in the request body.
+  // in the request body. For a staff token this is the OWNER's identity
+  // (req.proUserId/req.proMobile — see requireProOrStaffToken), which is
+  // exactly what the app sends since a staff session's user.id/mobile are
+  // the owner's, by design.
   if ((userId && userId !== req.proUserId) || (mobile && mobile !== req.proMobile)) {
     console.log('pro/sync POST: ownership mismatch — token:', req.proUserId, req.proMobile, 'body:', userId, mobile);
     return res.status(403).json({ error: 'Not authorized to modify this data.' });
@@ -826,7 +928,7 @@ router.post('/pro/sync', requireProToken, async (req, res) => {
 });
 
 // PRO SYNC FETCH — gets latest cloud data for user
-router.get('/pro/sync', requireProToken, async (req, res) => {
+router.get('/pro/sync', requireProOrStaffToken, async (req, res) => {
   const { userId, mobile } = req.query;
 
   if (!userId && !mobile) {
@@ -957,9 +1059,9 @@ router.get('/pro/users', requireAdmin, async (req, res) => {
 // (possibly stale) local array and overwriting anything the website
 // or online-payment webhook added in the meantime.
 // ---------------------------------------------------------------
-router.post('/pro/append-contribution', requireProToken, async (req, res) => {
+router.post('/pro/append-contribution', requireProOrStaffToken, async (req, res) => {
   const { contribution } = req.body;
-  console.log('append-contribution called — user:', req.proUserId, 'contribution:', contribution?.id);
+  console.log('append-contribution called — user:', req.proUserId, 'contribution:', contribution?.id, req.isStaff ? `(staff: ${req.staffUserId})` : '');
   if (!contribution || !contribution.id) {
     return res.status(400).json({ error: 'contribution is required' });
   }
@@ -1027,9 +1129,9 @@ router.post('/pro/append-contribution', requireProToken, async (req, res) => {
 // correct even if the server's figure has moved since the app last
 // fetched it.
 // ---------------------------------------------------------------
-router.post('/pro/append-pledge-payment', requireProToken, async (req, res) => {
+router.post('/pro/append-pledge-payment', requireProOrStaffToken, async (req, res) => {
   const { pledgeId, amountDelta, receiptNo, deletedPayments } = req.body;
-  console.log('append-pledge-payment called — user:', req.proUserId, 'pledge:', pledgeId, 'delta:', amountDelta);
+  console.log('append-pledge-payment called — user:', req.proUserId, 'pledge:', pledgeId, 'delta:', amountDelta, req.isStaff ? `(staff: ${req.staffUserId})` : '');
   if (!pledgeId || !amountDelta) {
     return res.status(400).json({ error: 'pledgeId and amountDelta are required' });
   }
