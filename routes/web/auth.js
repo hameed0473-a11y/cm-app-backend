@@ -114,7 +114,7 @@ router.post('/web-login', rateLimit(10, 15 * 60000), async (req, res) => {
       let otpRecord;
       try {
         otpRecord = await createAndSendEmailOtp(proUser.email, {
-          heading: 'We noticed a login from a new device — verify it\u2019s you'
+          heading: 'We noticed a login from a new device — verify it’s you'
         });
       } catch (otpErr) {
         console.error('web-login otp send error:', otpErr?.message || otpErr);
@@ -422,17 +422,33 @@ router.post('/web-staff-login', rateLimit(10, 15 * 60000), async (req, res) => {
       return res.status(401).json({ error: 'Incorrect Staff ID or password' });
     }
 
-    await supabase.from('staff_users').update({ last_login_at: new Date().toISOString() }).eq('id', staff.id);
-
     // The mobile app (unlike the website) needs the owner's id/mobile up
     // front to seed its local session — it has no separate "load dashboard"
     // step before this, so hand both back here rather than making the
     // client make a second round trip just to learn who its owner is.
+    // Also carries subscription_expires_at so a staff login can be blocked
+    // the same way /web-login and /pro/login already block the owner —
+    // without this, a staff account kept working past the owner's
+    // trial/subscription expiry (the only place that was ever enforced
+    // downstream was /pro/sync's read/write, and only after a token had
+    // already been issued).
     const { data: owner } = await supabase
       .from('pro_users')
-      .select('id, mobile')
+      .select('id, mobile, subscription_expires_at')
       .eq('id', staff.owner_user_id)
       .single();
+
+    const isOwnerExpired = owner?.subscription_expires_at &&
+      new Date(owner.subscription_expires_at) < new Date();
+
+    if (isOwnerExpired) {
+      return res.status(403).json({
+        error: 'Your admin’s Pro subscription has expired. Ask them to renew from the web dashboard.',
+        code: 'SUBSCRIPTION_EXPIRED'
+      });
+    }
+
+    await supabase.from('staff_users').update({ last_login_at: new Date().toISOString() }).eq('id', staff.id);
 
     const token = issueStaffToken(staff.id, staff.owner_user_id, staff.staff_user_id, staff.name);
     res.json({
