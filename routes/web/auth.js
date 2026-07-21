@@ -114,7 +114,7 @@ router.post('/web-login', rateLimit(10, 15 * 60000), async (req, res) => {
       let otpRecord;
       try {
         otpRecord = await createAndSendEmailOtp(proUser.email, {
-          heading: 'We noticed a login from a new device — verify it\u2019s you'
+          heading: 'We noticed a login from a new device — verify it’s you'
         });
       } catch (otpErr) {
         console.error('web-login otp send error:', otpErr?.message || otpErr);
@@ -424,7 +424,15 @@ router.post('/web-staff-login', rateLimit(10, 15 * 60000), async (req, res) => {
 
     await supabase.from('staff_users').update({ last_login_at: new Date().toISOString() }).eq('id', staff.id);
 
-    const token = issueStaffToken(staff.id, staff.owner_user_id, staff.staff_user_id, staff.name);
+    // Needed so issueStaffToken can embed it — req.proMobile for staff-aware
+    // routes (see middleware/auth.js) is read straight off the token.
+    const { data: owner } = await supabase
+      .from('pro_users')
+      .select('mobile')
+      .eq('id', staff.owner_user_id)
+      .single();
+
+    const token = issueStaffToken(staff.id, staff.owner_user_id, staff.staff_user_id, staff.name, owner?.mobile);
     res.json({
       success: true,
       token,
