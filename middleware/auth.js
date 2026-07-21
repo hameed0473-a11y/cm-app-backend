@@ -118,6 +118,16 @@ async function requireProOrStaffToken(req, res, next) {
       req.staffId = staff.id;
       req.staffName = staff.name;
       req.staffUserId = staff.staff_user_id;
+      // The mobile app's /pro/sync ownership check compares the request's
+      // mobile against req.proMobile — a staff token has no mobile identity
+      // of its own, so resolve the owner's mobile here to keep that check
+      // working transparently for staff sessions too.
+      const { data: owner } = await supabase
+        .from('pro_users')
+        .select('mobile')
+        .eq('id', staff.owner_user_id)
+        .single();
+      req.proMobile = owner?.mobile;
       return next();
     }
     return res.status(403).json({ error: 'Invalid token type' });

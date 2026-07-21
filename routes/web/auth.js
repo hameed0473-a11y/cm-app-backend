@@ -424,12 +424,24 @@ router.post('/web-staff-login', rateLimit(10, 15 * 60000), async (req, res) => {
 
     await supabase.from('staff_users').update({ last_login_at: new Date().toISOString() }).eq('id', staff.id);
 
+    // The mobile app (unlike the website) needs the owner's id/mobile up
+    // front to seed its local session — it has no separate "load dashboard"
+    // step before this, so hand both back here rather than making the
+    // client make a second round trip just to learn who its owner is.
+    const { data: owner } = await supabase
+      .from('pro_users')
+      .select('id, mobile')
+      .eq('id', staff.owner_user_id)
+      .single();
+
     const token = issueStaffToken(staff.id, staff.owner_user_id, staff.staff_user_id, staff.name);
     res.json({
       success: true,
       token,
       role: 'staff',
-      user: { name: staff.name, email: staff.email, staffUserId: staff.staff_user_id }
+      user: { name: staff.name, email: staff.email, staffUserId: staff.staff_user_id },
+      ownerUserId: owner?.id || staff.owner_user_id,
+      ownerMobile: owner?.mobile || null
     });
   } catch (err) {
     console.error('web-staff-login error:', err?.message || err);

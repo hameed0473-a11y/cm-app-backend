@@ -5,7 +5,7 @@ const supabase = require('../lib/supabase');
 const razorpay = require('../lib/razorpay');
 const gateways = require('../lib/gateways');
 const { rateLimit } = require('../middleware/rateLimit');
-const { requireAdmin, requireProToken, issueProAppToken } = require('../middleware/auth');
+const { requireAdmin, requireProToken, requireProOrStaffToken, issueProAppToken } = require('../middleware/auth');
 const { checkBruteForce, recordFailedAttempt, clearBruteForce } = require('../middleware/bruteForce');
 const { getDefaultBreakup, getRemainingBreakup, breakupTotal } = require('../utils/arrears');
 const { mirrorContribution, mirrorPledge, mirrorFullSyncBatch } = require('../utils/mirrorWrite');
@@ -695,7 +695,7 @@ router.post('/pro/forgot-password-reset', rateLimit(10, 10 * 60000), async (req,
 });
 
 // PRO SYNC SAVE — saves user's latest data to cloud
-router.post('/pro/sync', requireProToken, async (req, res) => {
+router.post('/pro/sync', requireProOrStaffToken, async (req, res) => {
   const { userId, mobile, contributors, targets, contributions, pledges } = req.body;
 
   if (!userId && !mobile) {
@@ -826,7 +826,7 @@ router.post('/pro/sync', requireProToken, async (req, res) => {
 });
 
 // PRO SYNC FETCH — gets latest cloud data for user
-router.get('/pro/sync', requireProToken, async (req, res) => {
+router.get('/pro/sync', requireProOrStaffToken, async (req, res) => {
   const { userId, mobile } = req.query;
 
   if (!userId && !mobile) {
@@ -957,7 +957,7 @@ router.get('/pro/users', requireAdmin, async (req, res) => {
 // (possibly stale) local array and overwriting anything the website
 // or online-payment webhook added in the meantime.
 // ---------------------------------------------------------------
-router.post('/pro/append-contribution', requireProToken, async (req, res) => {
+router.post('/pro/append-contribution', requireProOrStaffToken, async (req, res) => {
   const { contribution } = req.body;
   console.log('append-contribution called — user:', req.proUserId, 'contribution:', contribution?.id);
   if (!contribution || !contribution.id) {
@@ -1027,7 +1027,7 @@ router.post('/pro/append-contribution', requireProToken, async (req, res) => {
 // correct even if the server's figure has moved since the app last
 // fetched it.
 // ---------------------------------------------------------------
-router.post('/pro/append-pledge-payment', requireProToken, async (req, res) => {
+router.post('/pro/append-pledge-payment', requireProOrStaffToken, async (req, res) => {
   const { pledgeId, amountDelta, receiptNo, deletedPayments } = req.body;
   console.log('append-pledge-payment called — user:', req.proUserId, 'pledge:', pledgeId, 'delta:', amountDelta);
   if (!pledgeId || !amountDelta) {
