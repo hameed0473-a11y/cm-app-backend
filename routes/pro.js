@@ -6,9 +6,11 @@ const razorpay = require('../lib/razorpay');
 const gateways = require('../lib/gateways');
 const { rateLimit } = require('../middleware/rateLimit');
 const { requireAdmin, requireProToken, issueProAppToken } = require('../middleware/auth');
+const { checkBruteForce, recordFailedAttempt, clearBruteForce } = require('../middleware/bruteForce');
 const { getDefaultBreakup, getRemainingBreakup, breakupTotal } = require('../utils/arrears');
 const { mirrorContribution, mirrorPledge, mirrorFullSyncBatch } = require('../utils/mirrorWrite');
 const { fetchNormalizedUserData, compareUserData } = require('../utils/readFromNormalized');
+const { sendEmailViaResend, generateOtp } = require('../utils/email');
 
 const router = express.Router();
 
@@ -548,6 +550,121 @@ router.post('/pro/login', async (req, res) => {
   } catch (err) {
     console.error('Pro login error:', err);
     res.status(500).json({ error: 'Internal server error occurred.' });
+  }
+});
+
+// ---------------------------------------------------------------
+// FORGOT PASSWORD — replaces the old "reveal the plaintext password"
+// mobile-app flow. The account's registered email is looked up
+// server-side and never sent back to the client (only a masked
+// version, e.g. "j***@gmail.com"), so a stolen mobile number alone
+// can't be used to discover where the OTP will land. Reuses the same
+// email_otps table/Resend helper as /send-email-otp, but scoped to a
+// specific pro_users row so the reset is atomic with OTP verification
+// (rather than trusting a separately-cleared "authenticated" flag).
+// ---------------------------------------------------------------
+router.post('/pro/forgot-password-request', rateLimit(5, 10 * 60000), async (req, res) => {
+  const { mobile } = req.body;
+  if (!mobile) return res.status(400).json({ error: 'Mobile number is required.' });
+
+  try {
+    const { data: user, error } = await supabase
+      .from('pro_users')
+      .select('email')
+      .eq('mobile', mobile.trim())
+      .single();
+
+    if (error || !user) return res.status(404).json({ error: 'No Pro account found with this mobile number.' });
+
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+    await supabase.from('email_otps').delete().eq('email', user.email).eq('used', false);
+    const { data: otpRecord, error: insertError } = await supabase
+      .from('email_otps')
+      .insert([{ email: user.email, otp, expires_at: expiresAt, used: false }])
+      .select()
+      .single();
+    if (insertError) return res.status(500).json({ error: 'Failed to generate OTP. Please try again.' });
+
+    await sendEmailViaResend(
+      user.email,
+      'Reset Your Password — Contributions Manager',
+      `<div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+         <h2 style="color: #059669; margin-bottom: 8px;">Contributions Manager</h2>
+         <p style="color: #374151; font-size: 15px;">Your password reset code is:</p>
+         <div style="background: #f0fdf4; border: 2px solid #10b981; border-radius: 12px; padding: 20px; text-align: center; margin: 20px 0;">
+           <span style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #065f46;">${otp}</span>
+         </div>
+         <p style="color: #6b7280; font-size: 13px;">This code expires in <strong>5 minutes</strong>. If you did not request this, please ignore this email — your password will not change.</p>
+       </div>`
+    );
+
+    const maskedEmail = user.email.replace(/^(.{1,2}).*(@.*)$/, (_, a, b) => `${a}***${b}`);
+    res.json({ success: true, stateId: otpRecord.id.toString(), maskedEmail });
+  } catch (err) {
+    console.error('forgot-password-request error:', err?.message || err);
+    res.status(500).json({ error: 'Server error. Please try again.' });
+  }
+});
+
+router.post('/pro/forgot-password-reset', rateLimit(10, 10 * 60000), async (req, res) => {
+  const { mobile, stateId, otp, newPassword } = req.body;
+  if (!mobile || !stateId || !otp || !newPassword) {
+    return res.status(400).json({ error: 'mobile, stateId, otp, and newPassword are all required.' });
+  }
+  if (!/^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{6,}$/.test(newPassword)) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters and include both letters and numbers.' });
+  }
+
+  const parsedId = parseInt(stateId);
+  if (isNaN(parsedId)) return res.status(400).json({ error: 'Invalid session. Please request a new code.' });
+
+  const otpKey = `pwreset:${parsedId}`;
+  const bruteCheck = checkBruteForce(otpKey, 5, 15 * 60000);
+  if (bruteCheck.blocked) return res.status(429).json({ error: bruteCheck.message });
+
+  try {
+    const { data: user, error: userErr } = await supabase
+      .from('pro_users')
+      .select('id, email')
+      .eq('mobile', mobile.trim())
+      .single();
+    if (userErr || !user) return res.status(404).json({ error: 'No Pro account found with this mobile number.' });
+
+    const { data: otpRecord, error: otpErr } = await supabase
+      .from('email_otps')
+      .select('*')
+      .eq('id', parsedId)
+      .eq('email', user.email)
+      .eq('used', false)
+      .single();
+    if (otpErr || !otpRecord) return res.status(400).json({ error: 'Code expired or invalid. Please request a new one.' });
+
+    if (new Date(otpRecord.expires_at) < new Date()) {
+      await supabase.from('email_otps').delete().eq('id', parsedId);
+      return res.status(400).json({ error: 'Code has expired. Please request a new one.' });
+    }
+
+    if (String(otpRecord.otp).trim() !== String(otp).trim()) {
+      recordFailedAttempt(otpKey, 5, 15 * 60000);
+      return res.status(401).json({ error: 'Incorrect code. Please try again.' });
+    }
+    clearBruteForce(otpKey);
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const { error: updateErr } = await supabase
+      .from('pro_users')
+      .update({ password: hashedPassword })
+      .eq('id', user.id);
+    if (updateErr) return res.status(500).json({ error: 'Could not update your password. Please try again.' });
+
+    await supabase.from('email_otps').update({ used: true }).eq('id', parsedId);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('forgot-password-reset error:', err?.message || err);
+    res.status(500).json({ error: 'Server error. Please try again.' });
   }
 });
 
