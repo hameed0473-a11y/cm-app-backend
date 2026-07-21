@@ -11,6 +11,7 @@ const { getDefaultBreakup, getRemainingBreakup, breakupTotal } = require('../uti
 const { mirrorContribution, mirrorPledge, mirrorFullSyncBatch } = require('../utils/mirrorWrite');
 const { fetchNormalizedUserData, compareUserData } = require('../utils/readFromNormalized');
 const { sendEmailViaResend, generateOtp } = require('../utils/email');
+const { computeAmountDue, countUniqueSubscribers } = require('../lib/pricing');
 
 const router = express.Router();
 
@@ -438,7 +439,19 @@ router.post('/pro/register', async (req, res) => {
       pledges: initialData?.pledges || []
     };
 
-    res.json({ success: true, user: safeUser, data: seedData, proSyncToken: issueProAppToken(newUser.id, newUser.mobile) });
+    // Drives the mobile app's "free trial & pricing" pop-up shown once
+    // right after registration — same info/copy as the web dashboard's
+    // equivalent pop-up (routes/web/dashboard.js's trialInfo). New
+    // accounts have no chosen currency yet (mobile has no onboarding
+    // step for it), so this defaults to INR same as getCurrentRates().
+    const pricing = await computeAmountDue(countUniqueSubscribers(seedData.contributors, seedData.pledges), 'INR');
+    const trialInfo = {
+      subscriptionExpiresAt: newUser.subscription_expires_at,
+      daysRemaining: 30,
+      pricing
+    };
+
+    res.json({ success: true, user: safeUser, data: seedData, proSyncToken: issueProAppToken(newUser.id, newUser.mobile), trialInfo });
   } catch (err) {
     console.error('Pro registration error:', err);
     res.status(500).json({ error: 'Internal server error occurred.' });
@@ -531,12 +544,25 @@ router.post('/pro/login', async (req, res) => {
       console.warn('[cutover] new-table read failed on pro/login, falling back to old JSON:', err?.message || err);
     }
 
+    // Drives the mobile app's "free trial & pricing" pop-up, shown once
+    // per account on first login — same info/copy as the web dashboard's
+    // equivalent pop-up (routes/web/dashboard.js's trialInfo).
+    const daysRemaining = user.subscription_expires_at
+      ? Math.max(0, Math.ceil((new Date(user.subscription_expires_at).getTime() - Date.now()) / (24 * 60 * 60 * 1000)))
+      : null;
+    const pricing = await computeAmountDue(
+      countUniqueSubscribers(responseData?.contributors, responseData?.pledges),
+      user.currency || 'INR'
+    );
+    const trialInfo = { subscriptionExpiresAt: user.subscription_expires_at, daysRemaining, pricing };
+
     res.json({
       success: true,
       user: safeUser,
       previousLogin: previousLoginTime,
       data: responseData,
-      proSyncToken: issueProAppToken(user.id, user.mobile)
+      proSyncToken: issueProAppToken(user.id, user.mobile),
+      trialInfo
     });
 
     // Ongoing monitoring — runs AFTER the response is already sent.
