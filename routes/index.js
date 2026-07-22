@@ -24,5 +24,6 @@ router.use(require('./adminSubscriptions')); // /admin-find-subscriber, /admin-e
 router.use(require('./misc'));           // /visitor
 router.use(require('./pledgeQr'));       // /pledge-qr-info, /pledge-qr-lookup, /pledge-qr-new-pledge, /pledge-qr-pay-existing, /pledge-qr-anonymous-pay
 router.use(require('./contact'));        // /contact-inquiry
+router.use(require('./cron'));           // /cron/run-rollovers (manual/external fallback trigger)
 
 module.exports = router;

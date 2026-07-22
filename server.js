@@ -3,6 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 
 const authRoutes = require('./routes'); // resolves to ./routes/index.js
+const { runRolloverForAllUsers } = require('./utils/rolloverEngine');
 
 const app = express();
 
@@ -96,3 +97,23 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// ---------------------------------------------------------------
+// GOAL ROLLOVER SCHEDULER — needs no external cron setup. Runs once
+// shortly after startup (catching up on anything missed while the
+// server was down), then checks every hour whether the calendar day
+// has changed and runs once per day if so. Monthly/yearly precision
+// doesn't need finer granularity than that — see utils/rolloverEngine.js.
+// ---------------------------------------------------------------
+let lastRolloverRunDate = null;
+const HOUR_MS = 60 * 60 * 1000;
+
+function maybeRunRollover() {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (todayStr === lastRolloverRunDate) return;
+  lastRolloverRunDate = todayStr;
+  runRolloverForAllUsers().catch(err => console.error('[rollover] scheduled run failed:', err?.message || err));
+}
+
+setTimeout(maybeRunRollover, 30 * 1000); // let the server finish booting first
+setInterval(maybeRunRollover, HOUR_MS);

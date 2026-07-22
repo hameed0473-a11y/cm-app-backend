@@ -6,6 +6,7 @@ const { requireProToken, requireProOrStaffToken } = require('../../middleware/au
 const {
   mirrorTarget, mirrorArchiveTarget, mirrorSubscription, mirrorDeleteSubscription
 } = require('../../utils/mirrorWrite');
+const { periodKeyForDate, periodLabel } = require('../../utils/rolloverEngine');
 
 const router = express.Router();
 
@@ -40,15 +41,29 @@ router.post('/web-create-target', requireProToken, async (req, res) => {
 
     const targets = userData.targets || [];
 
+    // Monthly/yearly goals are dated from the moment they're created (e.g.
+    // "Cleaning Charges — July 2026") and roll over automatically at the end
+    // of their period — a new dated goal is created, every subscriber
+    // carries over, and any unpaid balance is added on top of their normal
+    // amount as an arrear (see utils/rolloverEngine.js). This repeats every
+    // period until the treasurer stops it via /web-stop-rollover, or
+    // manually completes/deletes the goal. Event goals don't roll over.
+    const baseName = name.trim();
+    let displayName = baseName;
+    let rolloverFields = {};
+    if (category !== 'event') {
+      const periodKey = periodKeyForDate(new Date(), category);
+      displayName = `${baseName} — ${periodLabel(periodKey, category)}`;
+      rolloverFields = { rollover: true, rolloverBaseName: baseName, rolloverPeriodKey: periodKey };
+    }
+
     const newTarget = {
       id: `target-${category}-${Date.now().toString().slice(-6)}`,
-      name: name.trim(),
+      name: displayName,
       category,
       status: 'active',
       targetAmount: Number(targetAmount) || 0,
-      // Monthly and yearly goals always roll over automatically (no manual
-      // opt-out). Event goals don't have rollover.
-      ...(category !== 'event' ? { rollover: true } : {})
+      ...rolloverFields
     };
     targets.push(newTarget);
 
@@ -294,6 +309,49 @@ router.post('/web-complete-target', requireProToken, async (req, res) => {
   } catch (err) {
     console.error('Web complete target error:', err?.message || err);
     res.status(500).json({ error: 'Failed to mark goal complete.' });
+  }
+});
+
+// ---------------------------------------------------------------
+// WEB STOP ROLLOVER — turns off automatic rollover for one active
+// monthly/yearly goal (see utils/rolloverEngine.js). The current period
+// keeps running as normal; only the *next* automatic period-end
+// continuation is prevented. The treasurer can still complete or delete
+// the goal manually at any time, same as before.
+// ---------------------------------------------------------------
+router.post('/web-stop-rollover', requireProToken, async (req, res) => {
+  const { targetId } = req.body;
+  if (!targetId) return res.status(400).json({ error: 'targetId is required' });
+
+  try {
+    const { data: userData, error } = await supabase
+      .from('pro_user_data')
+      .select('targets')
+      .eq('user_id', req.proUserId)
+      .single();
+
+    if (error || !userData) return res.status(404).json({ error: 'Could not find your data.' });
+
+    const targets = userData.targets || [];
+    const idx = targets.findIndex(t => t.id === targetId);
+    if (idx === -1) return res.status(404).json({ error: 'Goal not found.' });
+
+    targets[idx] = { ...targets[idx], rollover: false };
+
+    const { error: updateError } = await supabase
+      .from('pro_user_data')
+      .update({ targets, updated_at: new Date().toISOString() })
+      .eq('user_id', req.proUserId);
+
+    if (updateError) return res.status(500).json({ error: updateError.message });
+
+    // Dual-write: mirror the flag into the new table too.
+    await mirrorTarget(supabase, req.proUserId, targets[idx]);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Web stop rollover error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to stop rollover for this goal.' });
   }
 });
 
