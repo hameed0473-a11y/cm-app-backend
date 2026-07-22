@@ -216,9 +216,14 @@ async function runRolloverForAllUsers() {
       summary.usersUpdated++;
       summary.rolloversCreated += result.rolloverCount;
 
-      // Best-effort mirror writes — never block or fail the real result.
+      // Best-effort mirror writes — never fail the real result if one of
+      // these has a problem. Run strictly in push order (not concurrently):
+      // a new target's row must exist before any mirrorSubscription for it
+      // runs, since contributor_subscriptions.target_id has a foreign key
+      // to targets.id — firing them all at once let some subscription
+      // writes race ahead of their own target's insert and silently fail.
       for (const write of result.afterWrite) {
-        write().catch(() => {});
+        try { await write(); } catch { /* already logged inside each mirror* helper */ }
       }
     } catch (err) {
       console.error(`[rollover] error processing ${row.user_id}:`, err?.message || err);
