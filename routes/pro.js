@@ -357,27 +357,31 @@ router.post('/pro/register', async (req, res) => {
   }
 
   try {
-    // Check if Pro user already exists
-    const { data: existing } = await supabase
+    // Check if Pro user already exists. Uses limit(1) instead of single() —
+    // single() errors out (and silently yields null data, since that error
+    // goes unchecked) when more than one row matches, which would let the
+    // duplicate check no-op for any mobile/email that already has more than
+    // one existing row.
+    const { data: existingRows } = await supabase
       .from('pro_users')
       .select('id')
       .eq('mobile', mobile)
-      .single();
+      .limit(1);
 
-    if (existing) {
+    if (existingRows && existingRows.length > 0) {
       return res.status(400).json({ error: 'A Pro account with this mobile number already exists.' });
     }
 
     // Reject if this email already has a Pro account under a different
     // mobile number — otherwise the same person could register unlimited
     // accounts by reusing one email with a new mobile each time.
-    const { data: existingEmail } = await supabase
+    const { data: existingEmailRows } = await supabase
       .from('pro_users')
       .select('id')
       .eq('email', email.trim().toLowerCase())
-      .single();
+      .limit(1);
 
-    if (existingEmail) {
+    if (existingEmailRows && existingEmailRows.length > 0) {
       return res.status(400).json({ error: 'A Pro account with this email address already exists.' });
     }
 
