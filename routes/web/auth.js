@@ -191,6 +191,16 @@ router.post('/web-register', rateLimit(5, 30 * 60000), async (req, res) => {
       return res.status(400).json({ error: 'An account with this mobile number already exists. Please log in instead.' });
     }
 
+    // Reject if this email already has a Pro account under a different
+    // mobile number — otherwise the same person (or anyone else) could
+    // register unlimited accounts by reusing one email with a new mobile
+    // each time.
+    const { data: existingEmail } = await supabase
+      .from('pro_users').select('id').eq('email', email).single();
+    if (existingEmail) {
+      return res.status(400).json({ error: 'An account with this email address already exists. Please log in instead.' });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
     const now = new Date().toISOString();
     // 30-day free trial — after this, web-login's isProActive check blocks

@@ -368,6 +368,19 @@ router.post('/pro/register', async (req, res) => {
       return res.status(400).json({ error: 'A Pro account with this mobile number already exists.' });
     }
 
+    // Reject if this email already has a Pro account under a different
+    // mobile number — otherwise the same person could register unlimited
+    // accounts by reusing one email with a new mobile each time.
+    const { data: existingEmail } = await supabase
+      .from('pro_users')
+      .select('id')
+      .eq('email', email.trim().toLowerCase())
+      .single();
+
+    if (existingEmail) {
+      return res.status(400).json({ error: 'A Pro account with this email address already exists.' });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
     const newUserId = `pro-${Date.now().toString().slice(-8)}`;
     const now = new Date().toISOString();
