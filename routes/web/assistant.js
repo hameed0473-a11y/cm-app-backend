@@ -55,7 +55,10 @@ You can perform these actions directly using tools, instead of just explaining t
 - add_expense: logs an expense in Accounting.
 - add_payee: adds a new payee in Accounting.
 - raise_ticket: opens a new support ticket.
+- reopen_ticket: reopens the account's most recently solved support ticket.
 - set_currency: changes the account's collection currency.
+- edit_subscriber: updates an existing subscriber's mobile number or name.
+- report_query: answers a read-only question from data already loaded (totals, dues, counts, plan info) — never a write.
 
 Rules for each tool:
 - create_goal: you must know whether it's monthly, yearly, or a one-off/event pledge. If the user didn't say, ASK them first in plain text — never assume "event" or any other default.
@@ -66,7 +69,10 @@ Rules for each tool:
 - add_expense: needs an amount and a category from this exact list: Utility Bills, Staff Salaries, Maintenance, Cleaning, Office Expenses, Event Expenses, Construction & Renovation, Equipment Purchases, Charity Payments, Miscellaneous. Ask if the user's wording doesn't clearly match one of these.
 - add_payee: needs a name, mobile number, and a category from that same list.
 - raise_ticket: needs a category (one of: billing, collection, receipt_pdf, import_subscribers, other — default to "other" if unclear, this one is low-stakes) and a short description.
+- reopen_ticket: no parameters — always reopens the account's own last solved ticket. Never ask which ticket; there is only ever one target.
 - set_currency: needs a currency from: INR, USD, GBP, EUR, AUD, CAD, SGD, AED, NZD, CHF, ZAR, MYR, SAR, HKD.
+- edit_subscriber: needs a subscriber name (to look them up) and at least one of a new mobile number or a new name. Ask for whichever is missing.
+- report_query: needs a metric — one of: total_collected (optionally scoped to "month"), pending_subscribers, subscriber_due (needs subscriberName), active_goals, subscriber_count, current_plan. Pick the metric that matches what the user asked; never guess a subscriber name for subscriber_due.
 - Never guess a name, amount, or category the user didn't say — ask a short clarifying question in plain text instead of calling a tool with incomplete information (except raise_ticket's category, which may default to "other").
 
 You must NEVER delete, remove, or unsubscribe anything — there is no tool for it and you are not authorized to perform destructive actions. If asked to delete/remove/unsubscribe something, say plainly that you can't do that yourself (it always needs a manual click in the dashboard as a safety measure), and explain the manual steps instead.
@@ -233,6 +239,41 @@ const TOOLS = [
         currency: { type: 'string', enum: ['INR', 'USD', 'GBP', 'EUR', 'AUD', 'CAD', 'SGD', 'AED', 'NZD', 'CHF', 'ZAR', 'MYR', 'SAR', 'HKD'] }
       },
       required: ['currency']
+    }
+  },
+  {
+    name: 'edit_subscriber',
+    description: "Update an existing subscriber's mobile number or name.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        subscriberName: { type: 'string', description: "The subscriber's current name or mobile number, to look them up." },
+        name: { type: 'string', description: 'New name, only if the user wants it changed.' },
+        mobile: { type: 'string', description: 'New mobile number, only if the user wants it changed.' }
+      },
+      required: ['subscriberName']
+    }
+  },
+  {
+    name: 'reopen_ticket',
+    description: "Reopen the account's most recently solved support ticket. Takes no parameters.",
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'report_query',
+    description: 'Answer a read-only question from data already loaded in the dashboard — never writes anything.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        metric: {
+          type: 'string',
+          enum: ['total_collected', 'pending_subscribers', 'subscriber_due', 'active_goals', 'subscriber_count', 'current_plan'],
+          description: 'Which report to run.'
+        },
+        period: { type: 'string', enum: ['all', 'month'], description: 'Only for total_collected — defaults to "all" if omitted.' },
+        subscriberName: { type: 'string', description: 'Only for subscriber_due — the subscriber to look up.' }
+      },
+      required: ['metric']
     }
   }
 ];
