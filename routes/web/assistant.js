@@ -11,13 +11,16 @@ const MAX_HISTORY_TURNS = 10;
 const MAX_MESSAGE_LEN = 2000;
 
 // ---------------------------------------------------------------
-// AI DASHBOARD ASSISTANT — phase 1: voice/text Q&A only, no write
-// actions. Knows the dashboard's own layout and setup steps so it can
-// walk a user through things like linking a payment gateway or
-// creating a goal, without touching any data itself. Kept short/plain
-// since replies are read aloud via the browser's speech synthesis.
+// AI DASHBOARD ASSISTANT — phase 2 adds a small, fixed set of
+// "tools" (predefined instructions) the assistant can propose:
+// create_goal and collect_payment. It never touches the database
+// itself — it only returns a structured {type, params} action, which
+// the frontend resolves against the user's real goals/subscribers and
+// always confirms with the user before calling the existing
+// /web-create-target or /web-collect-payment endpoints. Everything
+// else stays plain-text Q&A, same as phase 1.
 // ---------------------------------------------------------------
-const SYSTEM_PROMPT = `You are the built-in voice/text help assistant inside the AFTech Contributions Manager (CM) Pro web dashboard, used by treasurers/collectors to manage community contributions, goals, subscribers, expenses and payments.
+const SYSTEM_PROMPT = `You are the built-in voice/text assistant inside the AFTech Contributions Manager (CM) Pro web dashboard, used by treasurers/collectors to manage community contributions, goals, subscribers, expenses and payments.
 
 Dashboard layout (left sidebar):
 - Overview: summary stats (total collected, subscribers, active goals, event pledges).
@@ -31,9 +34,17 @@ Dashboard layout (left sidebar):
 - Support: raise/view support tickets.
 - Staff: add staff accounts with limited access.
 
-How to create a goal: Sidebar -> "Goals and Pledges" -> click "New Goal" for a monthly or yearly goal (auto-renews each period) or "New Pledge Goal" for a one-off event (no renewal) -> enter a name and optional target amount -> Create.
+You can perform two actions directly using tools, instead of just explaining the steps:
+- create_goal: creates a new goal/pledge category.
+- collect_payment: records a payment collected from a subscriber for a goal.
 
-How to collect a payment: open the relevant goal or subscriber (or use the Pending tab) -> "Collect Payment" -> enter the amount -> Save. A receipt can then be shared via WhatsApp or SMS.
+Only call a tool when the user's request clearly asks for that action AND you have enough information. For collect_payment you need a subscriber name (or mobile number), a goal name, and an amount. For create_goal you need at least a name. Never guess a name or amount the user didn't say — if something required is missing or ambiguous, ask one short clarifying question in plain text instead of calling the tool.
+
+For anything else (how something works, setup steps, general questions), answer directly instead of using a tool:
+
+How to create a goal manually: Sidebar -> "Goals and Pledges" -> click "New Goal" for a monthly or yearly goal (auto-renews each period) or "New Pledge Goal" for a one-off event (no renewal) -> enter a name and optional target amount -> Create.
+
+How to collect a payment manually: open the relevant goal or subscriber (or use the Pending tab) -> "Collect Payment" -> enter the amount -> Save. A receipt can then be shared via WhatsApp or SMS.
 
 How to add a subscriber/contributor: Sidebar -> Subscribers -> add a contributor with name and mobile number, then open a goal and use "Add Subscribers" to subscribe them to it.
 
@@ -44,10 +55,43 @@ How to link a bank/payment gateway: Sidebar -> Integrations -> Payment Gateways 
 WhatsApp integration: Integrations -> WhatsApp tab -> connect it to send payment reminders and receipts in bulk.
 
 Rules for your replies:
-- Only answer questions about how to use this AFTech CM dashboard.
-- You cannot perform actions yet (cannot create goals, collect payments, etc. yourself) - only explain the exact steps/buttons the user should use themselves.
+- Only answer questions about, or perform actions within, this AFTech CM dashboard.
 - Keep answers short and conversational (usually under 60 words) since they may be read aloud by voice, unless the user explicitly asks for more detail.
-- If a question is unrelated to this app, say briefly that you can only help with the AFTech CM dashboard.`;
+- If a question is unrelated to this app, say briefly that you can only help with the AFTech CM dashboard.
+- When you call a tool, you may also include a short confirmation-style text reply (e.g. "Sure, here's what I'll create:") but keep it brief — the app will show the exact details separately.`;
+
+const TOOLS = [
+  {
+    name: 'create_goal',
+    description: 'Create a new contribution goal/pledge category. Use when the user asks to create, add, start, or set up a new goal, target, fund, or pledge collection.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The name of the goal, exactly as the user said it (e.g. "Diwali Fund", "Cleaning Charges").' },
+        category: {
+          type: 'string',
+          enum: ['monthly', 'yearly', 'event'],
+          description: '"monthly" or "yearly" for a goal that repeats every period, "event" for a one-off pledge collection with no repeat. Default to "event" if the user does not say which.'
+        },
+        targetAmount: { type: 'number', description: 'Optional target amount in the account currency. Omit if not mentioned.' }
+      },
+      required: ['name', 'category']
+    }
+  },
+  {
+    name: 'collect_payment',
+    description: 'Record that a payment/contribution has been collected from a subscriber for a goal. Use when the user asks to collect, record, log, or mark a payment/amount received from someone.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        subscriberName: { type: 'string', description: "The subscriber's name or mobile number, exactly as the user said it." },
+        goalName: { type: 'string', description: 'The name of the goal/target this payment is for, exactly as the user said it.' },
+        amount: { type: 'number', description: 'The amount collected.' }
+      },
+      required: ['subscriberName', 'goalName', 'amount']
+    }
+  }
+];
 
 router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken, async (req, res) => {
   const { message, history } = req.body;
@@ -65,7 +109,7 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
 
   const priorTurns = Array.isArray(history)
     ? history
-        .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.length <= MAX_MESSAGE_LEN)
+        .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim() && m.content.length <= MAX_MESSAGE_LEN)
         .slice(-MAX_HISTORY_TURNS)
         .map(m => ({ role: m.role, content: m.content }))
     : [];
@@ -84,6 +128,7 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
         model: ANTHROPIC_MODEL,
         max_tokens: 400,
         system: SYSTEM_PROMPT,
+        tools: TOOLS,
         messages
       })
     });
@@ -95,11 +140,18 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
       return res.status(502).json({ error: 'The assistant is temporarily unavailable. Please try again.' });
     }
 
-    const reply = Array.isArray(data.content)
-      ? data.content.map(block => block.text || '').join('').trim()
-      : '';
+    const blocks = Array.isArray(data.content) ? data.content : [];
+    const reply = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('').trim();
+    const toolUse = blocks.find(b => b.type === 'tool_use' && (b.name === 'create_goal' || b.name === 'collect_payment'));
 
-    res.json({ success: true, reply: reply || "Sorry, I couldn't come up with an answer to that." });
+    const responseBody = { success: true, reply };
+    if (toolUse) {
+      responseBody.action = { type: toolUse.name, params: toolUse.input || {} };
+    } else if (!reply) {
+      responseBody.reply = "Sorry, I couldn't come up with an answer to that.";
+    }
+
+    res.json(responseBody);
   } catch (err) {
     console.error('Assistant request failed:', err.message);
     res.status(502).json({ error: 'The assistant is temporarily unavailable. Please try again.' });
