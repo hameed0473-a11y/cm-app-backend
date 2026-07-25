@@ -83,6 +83,27 @@ function extractGoalMention(msg) {
   return m ? m[1].trim() : '';
 }
 
+// A subscriber's per-goal amount is the recurring due THEY are on the hook
+// for each period, not the goal's own (often unset) overall target — so
+// every place that subscribes someone to a goal must get this explicitly
+// from the user, via "... at 500", never default or guess it. Strips a
+// trailing "at <amount>" clause so the remaining text (goal name, etc.)
+// parses cleanly, and reports whichever amount it found either way.
+function stripTrailingAmount(msg) {
+  const m = msg.match(/^(.*?)\s+\bat\s+(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)(?:\s*(?:per\s*(?:month|year|period))?)?[.?!]*$/i);
+  if (m) return { rest: m[1].trim(), amount: Number(m[2]) || 0 };
+  return { rest: msg, amount: extractAmount(msg) };
+}
+
+// For a follow-up turn that's expected to be *just* the amount (a reply to
+// our own "how much should X pay?" question) — accepts a bare number, an
+// "at <number>" reply, or a currency-prefixed one.
+function extractBareOrAtAmount(msg) {
+  const m = msg.trim().match(/^(?:at\s+)?(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)\s*(?:per\s*(?:month|year|period))?[.?!]*$/i);
+  if (m) return Number(m[1]) || 0;
+  return extractAmount(msg);
+}
+
 function matchExpenseCategory(text) {
   const norm = text.toLowerCase();
   const found = EXPENSE_CATEGORIES.find(c => norm.includes(c.toLowerCase()) || c.toLowerCase().includes(norm.trim()));
@@ -101,6 +122,7 @@ function matchCurrency(text) {
 }
 
 const ADD_SUBSCRIBER_CLARIFY_RE = /general subscriber only, or also subscribe them to a specific goal/i;
+const ADD_SUBSCRIBER_AMOUNT_CLARIFY_RE = /how much should .+ pay per period for/i;
 
 // Handles both "add a subscriber named X, mobile Y [to Goal]" in one shot,
 // and the two-turn version where we asked "just add, or also subscribe to a
@@ -109,49 +131,122 @@ const ADD_SUBSCRIBER_CLARIFY_RE = /general subscriber only, or also subscribe th
 function parseAddSubscriber(msg, history) {
   const wantsAdd = /\b(add|create|register)\b/i.test(msg) && /\b(subscriber|contributor)\b/i.test(msg);
   if (wantsAdd) {
-    const { name, mobile } = extractNameMobile(msg, '(?:subscriber|contributor)');
+    const { rest, amount } = stripTrailingAmount(msg);
+    const { name, mobile } = extractNameMobile(rest, '(?:subscriber|contributor)');
     if (!name) return { reply: 'What\'s the subscriber\'s name? Try: "add a subscriber named Priya, mobile 9876543210".', handled: true };
     if (!mobile) return { reply: `What's ${name}'s mobile number?`, handled: true };
 
-    const goalName = extractGoalMention(msg);
+    const goalName = extractGoalMention(rest);
     if (goalName) {
-      return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName } }, handled: true };
+      if (!amount) {
+        return { reply: `How much should ${name} pay per period for "${goalName}"? Try: "add a subscriber named ${name}, mobile ${mobile}, to ${goalName} at 500".`, handled: true };
+      }
+      return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName, amount } }, handled: true };
     }
     return {
-      reply: `Got it — should I add ${name} as a general subscriber only, or also subscribe them to a specific goal right away? Reply "just add" or say the goal name.`,
+      reply: `Got it — should I add ${name} as a general subscriber only, or also subscribe them to a specific goal right away? Reply "just add" or say the goal name and their per-period amount, e.g. "Diwali Fund at 500".`,
       handled: true
     };
   }
 
-  // Only look at the single most recent assistant turn — if that wasn't our
-  // clarifying question, this message isn't a reply to it.
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role !== 'assistant') continue;
-    if (!ADD_SUBSCRIBER_CLARIFY_RE.test(history[i].content)) return null;
-    const priorUser = history[i - 1];
-    if (!priorUser || priorUser.role !== 'user') return null;
-    const { name, mobile } = extractNameMobile(priorUser.content, '(?:subscriber|contributor)');
-    if (!name || !mobile) return null;
+  // Is the most recent assistant turn one of ours — either the original
+  // "just add or a goal?" question, or our own "how much should they pay?"
+  // follow-up (asked when a goal was named without an amount)?
+  const lastAssistant = [...history].reverse().find(h => h.role === 'assistant');
+  if (!lastAssistant) return null;
+  const isAmountFollowUp = ADD_SUBSCRIBER_AMOUNT_CLARIFY_RE.test(lastAssistant.content);
+  const isOriginalClarify = ADD_SUBSCRIBER_CLARIFY_RE.test(lastAssistant.content);
+  if (!isAmountFollowUp && !isOriginalClarify) return null;
 
-    if (/^\s*(just add|no goal|no thanks?|general only|none|no)\s*[.?!]*$/i.test(msg)) {
-      return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile } }, handled: true };
+  // Recover the original name/mobile from the most recent user turn that
+  // actually contains them, scanning back as far as needed — this stays
+  // correct however many clarifying round-trips (goal? / amount?) happened
+  // since the original request.
+  let name = '', mobile = '';
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role !== 'user') continue;
+    const found = extractNameMobile(history[i].content, '(?:subscriber|contributor)');
+    if (found.name && found.mobile) { name = found.name; mobile = found.mobile; break; }
+  }
+  if (!name || !mobile) return null;
+
+  // We already know the goal name (it's in our own last question) and are
+  // only waiting on the amount — this message is expected to be just that,
+  // not a fresh goal name.
+  if (isAmountFollowUp) {
+    const goalMatch = lastAssistant.content.match(/for "([^"]+)"/);
+    const goalName = goalMatch ? goalMatch[1] : '';
+    if (!goalName) return null;
+    const amount = extractBareOrAtAmount(msg);
+    if (!amount) {
+      return { reply: `How much should ${name} pay per period for "${goalName}"? Reply e.g. "500".`, handled: true };
     }
-    return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName: msg.trim() } }, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName, amount } }, handled: true };
   }
 
-  return null;
+  if (/^\s*(just add|no goal|no thanks?|general only|none|no)\s*[.?!]*$/i.test(msg)) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile } }, handled: true };
+  }
+
+  const { rest, amount } = stripTrailingAmount(msg);
+  const goalName = rest.trim();
+  if (!goalName) {
+    return { reply: `Got it — should I add ${name} as a general subscriber only, or also subscribe them to a specific goal? Reply "just add" or say the goal name and amount, e.g. "Diwali Fund at 500".`, handled: true };
+  }
+  if (!amount) {
+    return { reply: `How much should ${name} pay per period for "${goalName}"? Reply e.g. "${goalName} at 500".`, handled: true };
+  }
+  return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName, amount } }, handled: true };
 }
 
-// "subscribe Ramesh to Diwali Fund" — links an EXISTING subscriber to an
-// EXISTING goal. Deliberately keyed off the word "subscribe" only (not
-// "add ... to ... goal") to avoid colliding with create_goal's own
-// add/goal trigger words.
-function parseSubscribeToGoal(msg) {
-  const m = msg.match(/\bsubscribe\b\s+([a-z0-9 .'-]+?)\s+\bto\b\s+(?:the\s+)?(?:goal\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?(?:\s+goal)?[.?!]*$/i);
-  if (!m) return { reply: 'Try: "subscribe Ramesh to Diwali Fund".', handled: true };
+const SUBSCRIBE_RE = /\bsubscribe\b\s+([a-z0-9 .'-]+?)\s+\bto\b\s+(?:the\s+)?(?:goal\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?(?:\s+goal)?[.?!]*$/i;
+const SUBSCRIBE_AMOUNT_CLARIFY_RE = /how much should .+ pay per period for/i;
+
+// "subscribe Ramesh to Diwali Fund at 500" — links an EXISTING subscriber to
+// an EXISTING goal, with the amount THEY specifically owe per period (never
+// the goal's own overall target, which is a different number and is often
+// unset — defaulting to it silently made new subscribers show as having no
+// dues, i.e. "already paid"). Deliberately keyed off the word "subscribe"
+// only (not "add ... to ... goal") to avoid colliding with create_goal's
+// own add/goal trigger words. Also handles the follow-up turn when the
+// amount wasn't given inline, by re-deriving the subscriber/goal from
+// whichever earlier user turn actually matched SUBSCRIBE_RE.
+function parseSubscribeToGoal(msg, history) {
+  const { rest, amount: strippedAmount } = stripTrailingAmount(msg);
+  const m = rest.match(SUBSCRIBE_RE) || msg.match(SUBSCRIBE_RE);
+  if (m) {
+    const subscriberName = m[1].trim();
+    const goalName = m[2].trim();
+    if (!strippedAmount) {
+      return { reply: `How much should ${subscriberName} pay per period for "${goalName}"? Try: "subscribe ${subscriberName} to ${goalName} at 500".`, handled: true };
+    }
+    return {
+      reply: 'Here\'s what I understood:',
+      action: { type: 'subscribe_to_goal', params: { subscriberName, goalName, amount: strippedAmount } },
+      handled: true
+    };
+  }
+
+  // Not a fresh "subscribe X to Y" message — is it a reply to our own
+  // "how much should they pay?" follow-up?
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+  if (!lastAssistant || !SUBSCRIBE_AMOUNT_CLARIFY_RE.test(lastAssistant.content)) return null;
+
+  let subscriberName = '', goalName = '';
+  for (let i = (history || []).length - 1; i >= 0; i--) {
+    if (history[i].role !== 'user') continue;
+    const found = history[i].content.match(SUBSCRIBE_RE);
+    if (found) { subscriberName = found[1].trim(); goalName = found[2].trim(); break; }
+  }
+  if (!subscriberName || !goalName) return null;
+
+  const amount = extractBareOrAtAmount(msg);
+  if (!amount) {
+    return { reply: `How much should ${subscriberName} pay per period for "${goalName}"? Try: "subscribe ${subscriberName} to ${goalName} at 500".`, handled: true };
+  }
   return {
     reply: 'Here\'s what I understood:',
-    action: { type: 'subscribe_to_goal', params: { subscriberName: m[1].trim(), goalName: m[2].trim() } },
+    action: { type: 'subscribe_to_goal', params: { subscriberName, goalName, amount } },
     handled: true
   };
 }
@@ -425,9 +520,8 @@ function parseLocalIntent(message, history) {
   const addSubscriberResult = parseAddSubscriber(msg, safeHistory);
   if (addSubscriberResult) return addSubscriberResult;
 
-  if (/\bsubscribe\b/i.test(msg) && /\bto\b/i.test(msg)) {
-    return parseSubscribeToGoal(msg);
-  }
+  const subscribeResult = parseSubscribeToGoal(msg, safeHistory);
+  if (subscribeResult) return subscribeResult;
 
   if (/\bpledge\b/i.test(msg) && !/\b(create|add|start|set ?up)\b/i.test(msg)) {
     return parseCreatePledge(msg);
