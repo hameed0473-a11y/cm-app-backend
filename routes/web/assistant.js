@@ -63,8 +63,9 @@ You can perform these actions directly using tools, instead of just explaining t
 Rules for each tool:
 - create_goal: you must know whether it's monthly, yearly, or a one-off/event pledge. If the user didn't say, ASK them first in plain text — never assume "event" or any other default.
 - collect_payment: you need a subscriber name (or mobile number) and an amount. If the user also names a specific goal, include goalName; if they don't mention one, simply omit goalName from the tool call — the app will show them their list of dues to pick from, so you must NOT ask which goal yourself or guess one.
-- add_subscriber: you need a name and mobile number. If the user doesn't also mention a goal, ask them once in plain text whether to just add the subscriber, or also subscribe them to a specific goal right away, and wait for their answer before calling the tool.
-- subscribe_to_goal / create_pledge: need a subscriber name and goal name (create_pledge also needs an amount).
+- add_subscriber: you need a name and mobile number. If the user doesn't also mention a goal, ask them once in plain text whether to just add the subscriber, or also subscribe them to a specific goal right away, and wait for their answer before calling the tool. If they do want them subscribed to a goal, you also need the amount that subscriber specifically owes per period for that goal — ask for it if not given, and never guess it or default to the goal's own target amount (a subscriber's due is per-person and usually different from the goal's overall target, which is also frequently unset).
+- subscribe_to_goal: needs a subscriber name, a goal name, AND the amount that subscriber specifically owes per period for that goal. This amount is never optional and must never default to the goal's own target amount — always ask if the user didn't state it.
+- create_pledge: needs a subscriber name, goal name, and amount.
 - mark_goal_complete / stop_rollover: need only the goal name.
 - add_expense: needs an amount and a category from this exact list: Utility Bills, Staff Salaries, Maintenance, Cleaning, Office Expenses, Event Expenses, Construction & Renovation, Equipment Purchases, Charity Payments, Miscellaneous. Ask if the user's wording doesn't clearly match one of these.
 - add_payee: needs a name, mobile number, and a category from that same list.
@@ -136,21 +137,23 @@ const TOOLS = [
       properties: {
         name: { type: 'string', description: "The subscriber's name." },
         mobile: { type: 'string', description: "The subscriber's mobile number." },
-        goalName: { type: 'string', description: 'Optional — only include if the user wants them subscribed to a specific goal right away.' }
+        goalName: { type: 'string', description: 'Optional — only include if the user wants them subscribed to a specific goal right away.' },
+        amount: { type: 'number', description: "Required whenever goalName is included — the amount this specific subscriber owes per period for that goal. Never the goal's own target amount; ask if not stated." }
       },
       required: ['name', 'mobile']
     }
   },
   {
     name: 'subscribe_to_goal',
-    description: 'Subscribe an existing subscriber to an existing goal.',
+    description: 'Subscribe an existing subscriber to an existing goal, at a specific per-period amount.',
     input_schema: {
       type: 'object',
       properties: {
         subscriberName: { type: 'string', description: "The subscriber's name or mobile number." },
-        goalName: { type: 'string', description: 'The goal to subscribe them to.' }
+        goalName: { type: 'string', description: 'The goal to subscribe them to.' },
+        amount: { type: 'number', description: "The amount this specific subscriber owes per period for this goal. Never the goal's own target amount — always ask if the user didn't state it." }
       },
-      required: ['subscriberName', 'goalName']
+      required: ['subscriberName', 'goalName', 'amount']
     }
   },
   {
