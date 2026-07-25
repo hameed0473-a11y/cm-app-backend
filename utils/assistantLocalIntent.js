@@ -115,7 +115,7 @@ function parseAddSubscriber(msg, history) {
 
     const goalName = extractGoalMention(msg);
     if (goalName) {
-      return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName } }, handled: true };
+      return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName } }, handled: true };
     }
     return {
       reply: `Got it — should I add ${name} as a general subscriber only, or also subscribe them to a specific goal right away? Reply "just add" or say the goal name.`,
@@ -134,9 +134,9 @@ function parseAddSubscriber(msg, history) {
     if (!name || !mobile) return null;
 
     if (/^\s*(just add|no goal|no thanks?|general only|none|no)\s*[.?!]*$/i.test(msg)) {
-      return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile } }, handled: true };
+      return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile } }, handled: true };
     }
-    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName: msg.trim() } }, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName: msg.trim() } }, handled: true };
   }
 
   return null;
@@ -150,7 +150,7 @@ function parseSubscribeToGoal(msg) {
   const m = msg.match(/\bsubscribe\b\s+([a-z0-9 .'-]+?)\s+\bto\b\s+(?:the\s+)?(?:goal\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?(?:\s+goal)?[.?!]*$/i);
   if (!m) return { reply: 'Try: "subscribe Ramesh to Diwali Fund".', handled: true };
   return {
-    reply: '[Test mode] Here\'s what I understood:',
+    reply: 'Here\'s what I understood:',
     action: { type: 'subscribe_to_goal', params: { subscriberName: m[1].trim(), goalName: m[2].trim() } },
     handled: true
   };
@@ -161,7 +161,7 @@ function parseCreatePledge(msg) {
   const m = msg.match(/\bpledge\b\s+(?:of\s+)?(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)\s+for\s+([a-z0-9 .'-]+?)\s+(?:towards|for|to)\s+([a-z0-9 &.'-]+?)[.?!]*$/i);
   if (!m) return { reply: 'Try: "pledge 1000 for Ramesh towards Diwali Fund".', handled: true };
   return {
-    reply: '[Test mode] Here\'s what I understood:',
+    reply: 'Here\'s what I understood:',
     action: { type: 'create_pledge', params: { amount: Number(m[1]) || 0, subscriberName: m[2].trim(), goalName: m[3].trim() } },
     handled: true
   };
@@ -173,7 +173,7 @@ function parseMarkComplete(msg) {
   if (!m) m = msg.match(/\bcomplete\b\s+(?:the\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?\s+goal/i);
   if (!m) return { reply: 'Try: "mark Diwali Fund as complete".', handled: true };
   return {
-    reply: '[Test mode] Here\'s what I understood:',
+    reply: 'Here\'s what I understood:',
     action: { type: 'mark_goal_complete', params: { goalName: m[1].trim() } },
     handled: true
   };
@@ -185,7 +185,7 @@ function parseStopRollover(msg) {
   if (!m) m = msg.match(/(?:stop|turn off|disable)\b.*?\brollover\b\s+(?:for|on)\s+["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?[.?!]*$/i);
   if (!m) return { reply: 'Try: "stop Cleaning Charges from rolling over".', handled: true };
   return {
-    reply: '[Test mode] Here\'s what I understood:',
+    reply: 'Here\'s what I understood:',
     action: { type: 'stop_rollover', params: { goalName: m[1].trim() } },
     handled: true
   };
@@ -207,7 +207,7 @@ function parseAddExpense(msg) {
   }
 
   return {
-    reply: '[Test mode] Here\'s what I understood:',
+    reply: 'Here\'s what I understood:',
     action: { type: 'add_expense', params: { amount, description, category } },
     handled: true
   };
@@ -226,7 +226,7 @@ function parseAddPayee(msg) {
   }
 
   return {
-    reply: '[Test mode] Here\'s what I understood:',
+    reply: 'Here\'s what I understood:',
     action: { type: 'add_payee', params: { name, mobile, category } },
     handled: true
   };
@@ -256,7 +256,7 @@ function parseRaiseTicket(msg) {
     .trim();
   if (!description) description = msg.trim();
   return {
-    reply: '[Test mode] Here\'s what I understood:',
+    reply: 'Here\'s what I understood:',
     action: { type: 'raise_ticket', params: { category, description } },
     handled: true
   };
@@ -267,7 +267,7 @@ function parseEditSubscriber(msg) {
   let m = msg.match(/(?:change|update|edit)\s+([a-z][a-z0-9 .'-]*?)'s\s+mobile(?:\s+number)?\s+to\s+(\d{6,15})/i);
   if (m) {
     return {
-      reply: '[Test mode] Here\'s what I understood:',
+      reply: 'Here\'s what I understood:',
       action: { type: 'edit_subscriber', params: { subscriberName: m[1].trim(), mobile: m[2].trim() } },
       handled: true
     };
@@ -276,7 +276,7 @@ function parseEditSubscriber(msg) {
   m = msg.match(/(?:change|update|edit)\s+([a-z][a-z0-9 .'-]*?)'s\s+name\s+to\s+([a-z][a-z0-9 .'-]*?)[.?!]*$/i);
   if (m) {
     return {
-      reply: '[Test mode] Here\'s what I understood:',
+      reply: 'Here\'s what I understood:',
       action: { type: 'edit_subscriber', params: { subscriberName: m[1].trim(), name: m[2].trim() } },
       handled: true
     };
@@ -290,7 +290,7 @@ function parseEditSubscriber(msg) {
 // description (too error-prone from voice), so no name/id extraction here.
 function parseReopenTicket() {
   return {
-    reply: '[Test mode] Here\'s what I understood:',
+    reply: 'Here\'s what I understood:',
     action: { type: 'reopen_ticket', params: {} },
     handled: true
   };
@@ -306,31 +306,31 @@ function parseReportQuery(msg) {
           msg.match(/\bdue\s*(?:amount)?\s*for\s+([a-z][a-z0-9 .'-]*?)[.?!]*$/i);
   if (m) {
     return {
-      reply: '[Test mode] Here\'s what I understood:',
+      reply: 'Here\'s what I understood:',
       action: { type: 'report_query', params: { metric: 'subscriber_due', subscriberName: m[1].trim() } },
       handled: true
     };
   }
 
   if (/\bhow many subscribers\b|\bsubscriber count\b|\btotal subscribers\b/i.test(msg)) {
-    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'subscriber_count' } }, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'subscriber_count' } }, handled: true };
   }
 
   if (/\bpending subscribers\b|\bwho(?:'s| is)?\s*pending\b|\boutstanding\s+(?:subscribers|dues)\b/i.test(msg)) {
-    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'pending_subscribers' } }, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'pending_subscribers' } }, handled: true };
   }
 
   if (/\bactive goals\b|\blist\b.*\bgoals\b/i.test(msg)) {
-    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'active_goals' } }, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'active_goals' } }, handled: true };
   }
 
   if (/\b(when does|when is)\b.*\b(renew|subscription|plan)\b/i.test(msg) || /\bmy\s+(current\s+)?(plan|subscription)\b/i.test(msg)) {
-    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'current_plan' } }, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'current_plan' } }, handled: true };
   }
 
   if (/\b(how much|total)\b.*\bcollect(?:ed)?\b/i.test(msg)) {
     const period = /\bthis month\b/i.test(msg) ? 'month' : 'all';
-    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'total_collected', period } }, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'total_collected', period } }, handled: true };
   }
 
   return null;
@@ -343,7 +343,7 @@ function parseSetCurrency(msg) {
     return { reply: `Which currency — one of: ${SUPPORTED_CURRENCIES.join(', ')}?`, handled: true };
   }
   return {
-    reply: '[Test mode] Here\'s what I understood:',
+    reply: 'Here\'s what I understood:',
     action: { type: 'set_currency', params: { currency } },
     handled: true
   };
@@ -476,7 +476,7 @@ function parseLocalIntent(message, history) {
     }
     // goalName may be empty here on purpose — the app will show the
     // subscriber's list of dues to pick from instead of guessing.
-    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'collect_payment', params: parsed }, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'collect_payment', params: parsed }, handled: true };
   }
 
   const wantsCreateGoal = /\b(create|add|start|set ?up)\b/i.test(msg) && /\b(goal|target|fund|pledge)\b/i.test(msg);
@@ -490,7 +490,7 @@ function parseLocalIntent(message, history) {
       return { reply: `What type of goal is "${name}" — monthly, yearly, or a one-off/event pledge?`, handled: true };
     }
     return {
-      reply: '[Test mode] Here\'s what I understood:',
+      reply: 'Here\'s what I understood:',
       action: { type: 'create_goal', params: { name, category, targetAmount: extractAmount(msg) } },
       handled: true
     };
