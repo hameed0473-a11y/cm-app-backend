@@ -3,6 +3,7 @@ require('dotenv').config();
 
 const { requireProOrStaffToken } = require('../../middleware/auth');
 const { rateLimit } = require('../../middleware/rateLimit');
+const { parseLocalIntent } = require('../../utils/assistantLocalIntent');
 
 const router = express.Router();
 
@@ -103,8 +104,12 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
     return res.status(400).json({ error: 'message is too long' });
   }
 
+  // No API key configured yet — fall back to a free, local, rule-based
+  // parser instead of erroring, so create_goal/collect_payment and the
+  // confirmation-card flow can be tested end-to-end at zero cost. Swaps
+  // itself out for the real Anthropic call the moment a key is set.
   if (!process.env.ANTHROPIC_API_KEY) {
-    return res.status(503).json({ error: 'The AI assistant is not set up yet. Please try again later.' });
+    return res.json({ success: true, ...parseLocalIntent(message) });
   }
 
   const priorTurns = Array.isArray(history)
