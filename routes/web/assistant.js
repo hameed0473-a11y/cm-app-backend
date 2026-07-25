@@ -44,16 +44,30 @@ Dashboard layout (left sidebar):
 - Support: raise/view support tickets.
 - Staff: add staff accounts with limited access.
 
-You can perform three actions directly using tools, instead of just explaining the steps:
+You can perform these actions directly using tools, instead of just explaining the steps:
 - create_goal: creates a new goal/pledge category.
 - collect_payment: records a payment collected from a subscriber for a goal.
 - add_subscriber: adds a new subscriber/contributor.
+- subscribe_to_goal: links an EXISTING subscriber to an EXISTING goal.
+- create_pledge: adds a subscriber's pledge amount to an event/one-off goal.
+- mark_goal_complete: marks an existing goal as completed.
+- stop_rollover: stops a monthly/yearly goal from automatically renewing next period.
+- add_expense: logs an expense in Accounting.
+- add_payee: adds a new payee in Accounting.
+- raise_ticket: opens a new support ticket.
+- set_currency: changes the account's collection currency.
 
 Rules for each tool:
 - create_goal: you must know whether it's monthly, yearly, or a one-off/event pledge. If the user didn't say, ASK them first in plain text — never assume "event" or any other default.
 - collect_payment: you need a subscriber name (or mobile number) and an amount. If the user also names a specific goal, include goalName; if they don't mention one, simply omit goalName from the tool call — the app will show them their list of dues to pick from, so you must NOT ask which goal yourself or guess one.
 - add_subscriber: you need a name and mobile number. If the user doesn't also mention a goal, ask them once in plain text whether to just add the subscriber, or also subscribe them to a specific goal right away, and wait for their answer before calling the tool.
-- Never guess a name, amount, or category the user didn't say — ask a short clarifying question in plain text instead of calling a tool with incomplete information.
+- subscribe_to_goal / create_pledge: need a subscriber name and goal name (create_pledge also needs an amount).
+- mark_goal_complete / stop_rollover: need only the goal name.
+- add_expense: needs an amount and a category from this exact list: Utility Bills, Staff Salaries, Maintenance, Cleaning, Office Expenses, Event Expenses, Construction & Renovation, Equipment Purchases, Charity Payments, Miscellaneous. Ask if the user's wording doesn't clearly match one of these.
+- add_payee: needs a name, mobile number, and a category from that same list.
+- raise_ticket: needs a category (one of: billing, collection, receipt_pdf, import_subscribers, other — default to "other" if unclear, this one is low-stakes) and a short description.
+- set_currency: needs a currency from: INR, USD, GBP, EUR, AUD, CAD, SGD, AED, NZD, CHF, ZAR, MYR, SAR, HKD.
+- Never guess a name, amount, or category the user didn't say — ask a short clarifying question in plain text instead of calling a tool with incomplete information (except raise_ticket's category, which may default to "other").
 
 You must NEVER delete, remove, or unsubscribe anything — there is no tool for it and you are not authorized to perform destructive actions. If asked to delete/remove/unsubscribe something, say plainly that you can't do that yourself (it always needs a manual click in the dashboard as a safety measure), and explain the manual steps instead.
 
@@ -120,8 +134,110 @@ const TOOLS = [
       },
       required: ['name', 'mobile']
     }
+  },
+  {
+    name: 'subscribe_to_goal',
+    description: 'Subscribe an existing subscriber to an existing goal.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        subscriberName: { type: 'string', description: "The subscriber's name or mobile number." },
+        goalName: { type: 'string', description: 'The goal to subscribe them to.' }
+      },
+      required: ['subscriberName', 'goalName']
+    }
+  },
+  {
+    name: 'create_pledge',
+    description: "Add a subscriber's pledge amount to an event/one-off goal.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        subscriberName: { type: 'string', description: "The subscriber's name or mobile number." },
+        goalName: { type: 'string', description: 'The event/pledge goal this is for.' },
+        amount: { type: 'number', description: 'The pledged amount.' }
+      },
+      required: ['subscriberName', 'goalName', 'amount']
+    }
+  },
+  {
+    name: 'mark_goal_complete',
+    description: 'Mark an existing goal as completed.',
+    input_schema: {
+      type: 'object',
+      properties: { goalName: { type: 'string', description: 'The goal to mark complete.' } },
+      required: ['goalName']
+    }
+  },
+  {
+    name: 'stop_rollover',
+    description: "Stop a monthly/yearly goal from automatically renewing at the end of its current period.",
+    input_schema: {
+      type: 'object',
+      properties: { goalName: { type: 'string', description: 'The goal to stop rolling over.' } },
+      required: ['goalName']
+    }
+  },
+  {
+    name: 'add_expense',
+    description: 'Log an expense in Accounting.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        amount: { type: 'number', description: 'The expense amount.' },
+        category: {
+          type: 'string',
+          enum: ['Utility Bills', 'Staff Salaries', 'Maintenance', 'Cleaning', 'Office Expenses', 'Event Expenses', 'Construction & Renovation', 'Equipment Purchases', 'Charity Payments', 'Miscellaneous'],
+          description: 'Must be exactly one of the listed categories — ask the user to pick one if their wording is unclear.'
+        },
+        description: { type: 'string', description: 'Optional short description of what the expense was for.' }
+      },
+      required: ['amount', 'category']
+    }
+  },
+  {
+    name: 'add_payee',
+    description: 'Add a new payee (vendor/staff/contractor the treasurer pays money out to) in Accounting.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: "The payee's name." },
+        mobile: { type: 'string', description: "The payee's mobile number." },
+        category: {
+          type: 'string',
+          enum: ['Utility Bills', 'Staff Salaries', 'Maintenance', 'Cleaning', 'Office Expenses', 'Event Expenses', 'Construction & Renovation', 'Equipment Purchases', 'Charity Payments', 'Miscellaneous'],
+          description: 'Must be exactly one of the listed categories — ask the user to pick one if their wording is unclear.'
+        }
+      },
+      required: ['name', 'mobile', 'category']
+    }
+  },
+  {
+    name: 'raise_ticket',
+    description: 'Open a new support ticket for the treasurer.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', enum: ['billing', 'collection', 'receipt_pdf', 'import_subscribers', 'other'], description: 'Default to "other" if the user\'s issue doesn\'t clearly match one of the specific categories.' },
+        description: { type: 'string', description: "A short description of the issue, in the user's own words." }
+      },
+      required: ['category', 'description']
+    }
+  },
+  {
+    name: 'set_currency',
+    description: "Change the account's collection currency.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        currency: { type: 'string', enum: ['INR', 'USD', 'GBP', 'EUR', 'AUD', 'CAD', 'SGD', 'AED', 'NZD', 'CHF', 'ZAR', 'MYR', 'SAR', 'HKD'] }
+      },
+      required: ['currency']
+    }
   }
 ];
+
+const TOOL_NAMES = new Set(TOOLS.map(t => t.name));
 
 router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken, async (req, res) => {
   const { message, history } = req.body;
@@ -177,7 +293,7 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
 
     const blocks = Array.isArray(data.content) ? data.content : [];
     const reply = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('').trim();
-    const toolUse = blocks.find(b => b.type === 'tool_use' && (b.name === 'create_goal' || b.name === 'collect_payment' || b.name === 'add_subscriber'));
+    const toolUse = blocks.find(b => b.type === 'tool_use' && TOOL_NAMES.has(b.name));
 
     const responseBody = { success: true, reply };
     if (toolUse) {
