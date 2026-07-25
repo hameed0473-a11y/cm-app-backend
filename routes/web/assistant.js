@@ -12,14 +12,23 @@ const MAX_HISTORY_TURNS = 10;
 const MAX_MESSAGE_LEN = 2000;
 
 // ---------------------------------------------------------------
-// AI DASHBOARD ASSISTANT — phase 2 adds a small, fixed set of
-// "tools" (predefined instructions) the assistant can propose:
-// create_goal and collect_payment. It never touches the database
-// itself — it only returns a structured {type, params} action, which
-// the frontend resolves against the user's real goals/subscribers and
-// always confirms with the user before calling the existing
-// /web-create-target or /web-collect-payment endpoints. Everything
-// else stays plain-text Q&A, same as phase 1.
+// AI DASHBOARD ASSISTANT — HYBRID ROUTING. Every message is tried
+// against the free, local, rule-based parser (utils/assistantLocalIntent.js)
+// first. If it confidently recognizes the message as one of the
+// predefined actions, a delete/remove refusal, or a FAQ topic, that
+// answer is returned immediately and Claude is never called — free,
+// deterministic, and identical whether or not ANTHROPIC_API_KEY is set.
+// Claude is only ever billed for the messages the local parser genuinely
+// doesn't recognize (open-ended questions, unusual phrasing) — "only
+// contact the AI when the question is difficult".
+//
+// The AI never touches the database itself — it only returns a
+// structured {type, params} action for one of the three predefined
+// tools below. The frontend resolves that action against the account's
+// real goals/subscribers and always confirms with the user before
+// calling the existing write endpoints. There is deliberately no
+// delete-type tool — see the local parser's safety gate, which refuses
+// delete/remove/unsubscribe requests before either path is even tried.
 // ---------------------------------------------------------------
 const SYSTEM_PROMPT = `You are the built-in voice/text assistant inside the AFTech Contributions Manager (CM) Pro web dashboard, used by treasurers/collectors to manage community contributions, goals, subscribers, expenses and payments.
 
@@ -35,11 +44,18 @@ Dashboard layout (left sidebar):
 - Support: raise/view support tickets.
 - Staff: add staff accounts with limited access.
 
-You can perform two actions directly using tools, instead of just explaining the steps:
+You can perform three actions directly using tools, instead of just explaining the steps:
 - create_goal: creates a new goal/pledge category.
 - collect_payment: records a payment collected from a subscriber for a goal.
+- add_subscriber: adds a new subscriber/contributor.
 
-Only call a tool when the user's request clearly asks for that action AND you have enough information. For collect_payment you need a subscriber name (or mobile number), a goal name, and an amount. For create_goal you need at least a name. Never guess a name or amount the user didn't say — if something required is missing or ambiguous, ask one short clarifying question in plain text instead of calling the tool.
+Rules for each tool:
+- create_goal: you must know whether it's monthly, yearly, or a one-off/event pledge. If the user didn't say, ASK them first in plain text — never assume "event" or any other default.
+- collect_payment: you need a subscriber name (or mobile number) and an amount. If the user also names a specific goal, include goalName; if they don't mention one, simply omit goalName from the tool call — the app will show them their list of dues to pick from, so you must NOT ask which goal yourself or guess one.
+- add_subscriber: you need a name and mobile number. If the user doesn't also mention a goal, ask them once in plain text whether to just add the subscriber, or also subscribe them to a specific goal right away, and wait for their answer before calling the tool.
+- Never guess a name, amount, or category the user didn't say — ask a short clarifying question in plain text instead of calling a tool with incomplete information.
+
+You must NEVER delete, remove, or unsubscribe anything — there is no tool for it and you are not authorized to perform destructive actions. If asked to delete/remove/unsubscribe something, say plainly that you can't do that yourself (it always needs a manual click in the dashboard as a safety measure), and explain the manual steps instead.
 
 For anything else (how something works, setup steps, general questions), answer directly instead of using a tool:
 
@@ -47,7 +63,7 @@ How to create a goal manually: Sidebar -> "Goals and Pledges" -> click "New Goal
 
 How to collect a payment manually: open the relevant goal or subscriber (or use the Pending tab) -> "Collect Payment" -> enter the amount -> Save. A receipt can then be shared via WhatsApp or SMS.
 
-How to add a subscriber/contributor: Sidebar -> Subscribers -> add a contributor with name and mobile number, then open a goal and use "Add Subscribers" to subscribe them to it.
+How to add a subscriber/contributor manually: Sidebar -> Subscribers -> add a contributor with name and mobile number, then open a goal and use "Add Subscribers" to subscribe them to it.
 
 How to link a bank/payment gateway: Sidebar -> Integrations -> Payment Gateways tab -> choose Razorpay (India, INR) or Stripe.
   Razorpay: In the Razorpay Dashboard go to Settings -> API Keys -> Generate Key, then paste the Key ID and Key Secret into the dashboard. Then in Razorpay go to Settings -> Webhooks -> Add New Webhook, use the Webhook URL shown in the dashboard, set a Webhook Secret (any strong text) and paste that same secret into the dashboard too. Start with Test keys, run one payment end-to-end, then switch to Live keys.
@@ -64,7 +80,7 @@ Rules for your replies:
 const TOOLS = [
   {
     name: 'create_goal',
-    description: 'Create a new contribution goal/pledge category. Use when the user asks to create, add, start, or set up a new goal, target, fund, or pledge collection.',
+    description: 'Create a new contribution goal/pledge category. Use when the user asks to create, add, start, or set up a new goal, target, fund, or pledge collection, AND you already know whether it is monthly, yearly, or a one-off/event pledge.',
     input_schema: {
       type: 'object',
       properties: {
@@ -72,7 +88,7 @@ const TOOLS = [
         category: {
           type: 'string',
           enum: ['monthly', 'yearly', 'event'],
-          description: '"monthly" or "yearly" for a goal that repeats every period, "event" for a one-off pledge collection with no repeat. Default to "event" if the user does not say which.'
+          description: '"monthly" or "yearly" for a goal that repeats every period, "event" for a one-off pledge collection with no repeat. Must be explicitly known from what the user said — ask first if unclear, never default.'
         },
         targetAmount: { type: 'number', description: 'Optional target amount in the account currency. Omit if not mentioned.' }
       },
@@ -86,10 +102,23 @@ const TOOLS = [
       type: 'object',
       properties: {
         subscriberName: { type: 'string', description: "The subscriber's name or mobile number, exactly as the user said it." },
-        goalName: { type: 'string', description: 'The name of the goal/target this payment is for, exactly as the user said it.' },
+        goalName: { type: 'string', description: 'The name of the goal/target this payment is for, only if the user explicitly named one. Omit this field entirely otherwise — do not guess or ask.' },
         amount: { type: 'number', description: 'The amount collected.' }
       },
-      required: ['subscriberName', 'goalName', 'amount']
+      required: ['subscriberName', 'amount']
+    }
+  },
+  {
+    name: 'add_subscriber',
+    description: 'Add a new subscriber/contributor. Use when the user asks to add, create, or register a new subscriber/contributor, after you have asked whether to also subscribe them to a goal (or they already told you).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: "The subscriber's name." },
+        mobile: { type: 'string', description: "The subscriber's mobile number." },
+        goalName: { type: 'string', description: 'Optional — only include if the user wants them subscribed to a specific goal right away.' }
+      },
+      required: ['name', 'mobile']
     }
   }
 ];
@@ -104,14 +133,6 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
     return res.status(400).json({ error: 'message is too long' });
   }
 
-  // No API key configured yet — fall back to a free, local, rule-based
-  // parser instead of erroring, so create_goal/collect_payment and the
-  // confirmation-card flow can be tested end-to-end at zero cost. Swaps
-  // itself out for the real Anthropic call the moment a key is set.
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return res.json({ success: true, ...parseLocalIntent(message) });
-  }
-
   const priorTurns = Array.isArray(history)
     ? history
         .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim() && m.content.length <= MAX_MESSAGE_LEN)
@@ -119,6 +140,15 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
         .map(m => ({ role: m.role, content: m.content }))
     : [];
 
+  // Try the free local parser first, on every request, key or no key.
+  const local = parseLocalIntent(message.trim(), priorTurns);
+  if (local.handled || !process.env.ANTHROPIC_API_KEY) {
+    const responseBody = { success: true, reply: local.reply };
+    if (local.action) responseBody.action = local.action;
+    return res.json(responseBody);
+  }
+
+  // Local parser wasn't confident this is a known pattern — escalate to Claude.
   const messages = [...priorTurns, { role: 'user', content: message.trim() }];
 
   try {
@@ -147,7 +177,7 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
 
     const blocks = Array.isArray(data.content) ? data.content : [];
     const reply = blocks.filter(b => b.type === 'text').map(b => b.text || '').join('').trim();
-    const toolUse = blocks.find(b => b.type === 'tool_use' && (b.name === 'create_goal' || b.name === 'collect_payment'));
+    const toolUse = blocks.find(b => b.type === 'tool_use' && (b.name === 'create_goal' || b.name === 'collect_payment' || b.name === 'add_subscriber'));
 
     const responseBody = { success: true, reply };
     if (toolUse) {
