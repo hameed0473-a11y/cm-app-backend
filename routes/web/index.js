@@ -20,5 +20,6 @@ router.use(require('./settings'));     // /web-save-integration, /web-integratio
 router.use(require('./tickets'));      // /web-raise-ticket, /web-my-tickets
 router.use(require('./whatsapp'));     // /web-save-whatsapp-integration, /web-whatsapp-integration-status, /web-remove-whatsapp-integration, /web-send-whatsapp-bulk
 router.use(require('./expenses'));     // /web-add-expense, /web-expenses, /web-delete-expense
+router.use(require('./assistant'));    // /assistant-chat
 
 module.exports = router;
