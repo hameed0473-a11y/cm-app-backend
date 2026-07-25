@@ -5,7 +5,7 @@ const supabase = require('../../lib/supabase');
 const { requireProToken, requireProOrStaffToken } = require('../../middleware/auth');
 const { getDefaultBreakup, getRemainingBreakup, breakupTotal } = require('../../utils/arrears');
 const { getMaxReceipts, getReceiptUsage } = require('../../lib/pricing');
-const { mirrorContribution, mirrorPledge, mirrorArchiveTarget } = require('../../utils/mirrorWrite');
+const { mirrorContribution, mirrorPledge, mirrorArchiveTarget, mirrorSubscription } = require('../../utils/mirrorWrite');
 
 const router = express.Router();
 
@@ -145,16 +145,14 @@ router.post('/web-collect-payment', requireProOrStaffToken, async (req, res) => 
         await markTargetCompletedIfNeeded(supabase, req.proUserId, targets, targetId);
       }
     } else {
-      // Same guard for monthly/yearly goals — recompute what's actually still
-      // due from the freshly-fetched data (same arrears-aware calculation the
-      // app itself uses) rather than trusting the amount blindly. If someone
-      // else (the app, or an online payment) already settled this due in the
-      // moments since this screen last refreshed, reject instead of recording
-      // a duplicate collection.
+      // Recompute what's actually still due from the freshly-fetched data
+      // (same arrears-aware calculation the app itself uses) rather than
+      // trusting the amount blindly.
       const contributors = userData.contributors || [];
       const targets = userData.targets || [];
       const contributor = contributors.find(c => c.id === contributorId);
       const target = targets.find(t => t.id === targetId);
+      let creditWrite = null;
 
       if (contributor && target) {
         const fallbackAmount = contributor.targetAmounts?.[targetId] ?? 0;
@@ -164,8 +162,20 @@ router.post('/web-collect-payment', requireProOrStaffToken, async (req, res) => 
           .reduce((s, c) => s + c.amountPaid, 0);
         const stillDue = breakupTotal(getRemainingBreakup(originalBreakup, totalPaidSoFar));
 
-        if (stillDue <= 0) {
-          return res.status(409).json({ error: 'This due has already been fully collected — please refresh your screen.' });
+        // Anything paid beyond what's actually due (including a voluntary
+        // payment when nothing is due at all) is banked as an advance
+        // credit on this contributor's breakup for this goal, rather than
+        // silently discarded — it's applied automatically to their future
+        // dues (including through automatic rollovers) until used up. The
+        // full amount is still recorded as a real payment below either way.
+        const excess = Math.max(0, Number(amount) - stillDue);
+        if (excess > 0) {
+          const creditIdx = originalBreakup.findIndex(i => i.amount < 0);
+          const creditLabel = creditIdx !== -1 ? originalBreakup[creditIdx].label : 'Advance credit';
+          const existingCredit = creditIdx !== -1 ? -originalBreakup[creditIdx].amount : 0;
+          const dueItems = originalBreakup.filter((_, i) => i !== creditIdx);
+          const updatedBreakup = [{ label: creditLabel, amount: -(existingCredit + excess) }, ...dueItems];
+          creditWrite = { contributorId, targetId, breakup: updatedBreakup, amount: breakupTotal(updatedBreakup) };
         }
       }
 
@@ -182,14 +192,32 @@ router.post('/web-collect-payment', requireProOrStaffToken, async (req, res) => 
       };
       contributions.push(newContribution);
 
+      const updatePayload = { contributions, updated_at: new Date().toISOString() };
+      if (creditWrite) {
+        const idx = contributors.findIndex(c => c.id === creditWrite.contributorId);
+        if (idx !== -1) {
+          contributors[idx] = {
+            ...contributors[idx],
+            targetBreakups: { ...(contributors[idx].targetBreakups || {}), [creditWrite.targetId]: creditWrite.breakup },
+            targetAmounts: { ...(contributors[idx].targetAmounts || {}), [creditWrite.targetId]: creditWrite.amount }
+          };
+          updatePayload.contributors = contributors;
+        }
+      }
+
       const { error: updateError } = await supabase
         .from('pro_user_data')
-        .update({ contributions, updated_at: new Date().toISOString() })
+        .update(updatePayload)
         .eq('user_id', req.proUserId);
       if (updateError) return res.status(500).json({ error: updateError.message });
 
-      // Dual-write: mirror the new contribution into the new normalized table too.
+      // Dual-write: mirror the new contribution, then (in order — see the
+      // rollover engine's own note on why concurrent mirror-writes are
+      // unsafe here) the updated credit/breakup if there was one.
       await mirrorContribution(supabase, req.proUserId, newContribution);
+      if (creditWrite) {
+        await mirrorSubscription(supabase, creditWrite.contributorId, creditWrite.targetId, creditWrite.amount, creditWrite.breakup);
+      }
 
       // Auto-complete: if this goal is now 100% funded across every
       // subscribed contributor, mark it completed — still visible

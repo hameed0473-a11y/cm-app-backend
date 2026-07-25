@@ -127,7 +127,18 @@ router.post('/web-subscribe-contributors', requireProOrStaffToken, async (req, r
       if (!targetIds.includes(targetId)) targetIds.push(targetId);
       const targetAmounts = { ...(c.targetAmounts || {}) };
       targetAmounts[targetId] = Number(sub.amount) || 0;
-      contributors[idx] = { ...c, targetIds, targetAmounts };
+      // For rollover-eligible goals, also stash the subscribed amount under
+      // the goal's stable base name — this is what the rollover engine reads
+      // as "the normal per-period amount" for computing each new period's own
+      // due line. targetAmounts itself can't be used for that: it gets
+      // overwritten to reflect the true current due (arrears/credit-inclusive)
+      // as payments and rollovers happen, so it drifts away from the
+      // originally-subscribed recurring amount over time.
+      let recurringAmounts = c.recurringAmounts;
+      if (target.rolloverBaseName) {
+        recurringAmounts = { ...(c.recurringAmounts || {}), [target.rolloverBaseName]: Number(sub.amount) || 0 };
+      }
+      contributors[idx] = { ...c, targetIds, targetAmounts, recurringAmounts };
       updatedSubs.push({ contributorId: sub.contributorId, amount: targetAmounts[targetId] });
       updatedCount++;
     });

@@ -54,14 +54,35 @@ function isPeriodBefore(a, b) {
 function getDefaultBreakup(targetName, amount) {
   return [{ label: `${targetName} due`, amount }];
 }
+// A breakup may contain at most one negative line — a banked "Advance
+// credit" from a past overpayment (see /web-collect-payment). It's applied
+// automatically to whatever's still due, oldest item first, in a second
+// pass after real cash payments. Kept identical to utils/arrears.js.
 function getRemainingBreakup(original, totalPaid) {
+  const round2 = n => Math.round(n * 100) / 100;
+  const creditIdx = original.findIndex(i => i.amount < 0);
+  const creditLabel = creditIdx !== -1 ? original[creditIdx].label : 'Advance credit';
+  const startingCredit = creditIdx !== -1 ? -original[creditIdx].amount : 0;
+  const dueItems = original.filter((_, i) => i !== creditIdx);
+
   let remainingPaid = Math.max(0, totalPaid);
-  return original.map(item => {
+  let result = dueItems.map(item => {
     if (remainingPaid <= 0) return { ...item };
     const reduce = Math.min(item.amount, remainingPaid);
     remainingPaid -= reduce;
-    return { ...item, amount: Math.round((item.amount - reduce) * 100) / 100 };
+    return { ...item, amount: round2(item.amount - reduce) };
   });
+
+  let remainingCredit = startingCredit;
+  result = result.map(item => {
+    if (remainingCredit <= 0 || item.amount <= 0) return item;
+    const reduce = Math.min(item.amount, remainingCredit);
+    remainingCredit -= reduce;
+    return { ...item, amount: round2(item.amount - reduce) };
+  });
+
+  if (creditIdx === -1) return result;
+  return [{ label: creditLabel, amount: round2(-remainingCredit) }, ...result];
 }
 function breakupTotal(breakup) {
   return breakup.reduce((s, i) => s + i.amount, 0);
@@ -149,12 +170,22 @@ function processUserRow(row, today) {
       contributors = contributors.map(c => {
         if (!(c.targetIds || []).includes(oldId)) return c;
 
-        const fallbackAmount = c.targetAmounts?.[oldId] ?? oldAmount;
+        // The stable "normal" per-period amount, NOT the true-current-due
+        // value: prefer recurringAmounts (keyed by the goal's stable base
+        // name, set at subscribe-time and kept accurate here) over
+        // targetAmounts, which drifts to reflect arrears/credit-inclusive
+        // totals as payments and rollovers happen and would otherwise cause
+        // that drifted value to compound into every following period.
+        const recurringAmount = c.recurringAmounts?.[baseName];
+        const fallbackAmount = recurringAmount ?? c.targetAmounts?.[oldId] ?? oldAmount;
         const originalBreakup = c.targetBreakups?.[oldId] || getDefaultBreakup(oldName, fallbackAmount);
         const totalPaid = contributions
           .filter(ct => ct.contributorId === c.id && ct.targetId === oldId && !ct.deleted)
           .reduce((s, ct) => s + ct.amountPaid, 0);
-        const remaining = getRemainingBreakup(originalBreakup, totalPaid).filter(item => item.amount > 0.001);
+        // Keep unresolved arrears (positive) AND any leftover advance credit
+        // (negative) — only drop exactly-zero lines. Dropping negative
+        // items here would silently erase banked credit at every rollover.
+        const remaining = getRemainingBreakup(originalBreakup, totalPaid).filter(item => Math.abs(item.amount) > 0.001);
 
         const newDueItem = { label: `${periodLabel(nextKey, category)} due`, amount: fallbackAmount };
         const newBreakup = [...remaining, newDueItem];
@@ -169,7 +200,8 @@ function processUserRow(row, today) {
           ...c,
           targetIds: nextTargetIds,
           targetAmounts: { ...(c.targetAmounts || {}), [newTargetId]: newAmount },
-          targetBreakups: { ...(c.targetBreakups || {}), [newTargetId]: newBreakup }
+          targetBreakups: { ...(c.targetBreakups || {}), [newTargetId]: newBreakup },
+          recurringAmounts: { ...(c.recurringAmounts || {}), [baseName]: fallbackAmount }
         };
       });
 
