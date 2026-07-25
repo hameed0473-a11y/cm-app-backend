@@ -327,7 +327,13 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
         max_tokens: 400,
-        system: SYSTEM_PROMPT,
+        // Cached: this system prompt + the tool list are identical on every
+        // request (same account, same code) — caching the last system block
+        // covers both (render order is tools -> system -> messages), so only
+        // the ~1st request per 5-minute window pays full price for this
+        // ~4,400-token prefix. Everything after it (conversation history,
+        // the new message) still bills normally, as it should.
+        system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
         tools: TOOLS,
         messages
       })
@@ -338,6 +344,18 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
     if (!response.ok) {
       console.error('Assistant API error:', data?.error || data);
       return res.status(502).json({ error: 'The assistant is temporarily unavailable. Please try again.' });
+    }
+
+    // Cheap visibility into whether prompt caching is actually landing —
+    // cache_read_input_tokens staying 0 across back-to-back requests within
+    // the same 5-minute window means something is invalidating the cache.
+    if (data.usage) {
+      console.log('Assistant usage:', {
+        input: data.usage.input_tokens,
+        cache_write: data.usage.cache_creation_input_tokens || 0,
+        cache_read: data.usage.cache_read_input_tokens || 0,
+        output: data.usage.output_tokens
+      });
     }
 
     const blocks = Array.isArray(data.content) ? data.content : [];
