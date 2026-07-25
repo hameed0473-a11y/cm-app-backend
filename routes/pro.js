@@ -74,9 +74,18 @@ router.get('/pro/lookup-dues', rateLimit(20, 10 * 60000), async (req, res) => {
           const totalPaid = contributions
             .filter(c => c.contributorId === contributor.id && c.targetId === targetId && !c.deleted)
             .reduce((s, c) => s + c.amountPaid, 0);
-          const amountDue = breakupTotal(getRemainingBreakup(originalBreakup, totalPaid));
+          const remaining = getRemainingBreakup(originalBreakup, totalPaid);
+          // Split the remaining breakup into what's actually owed (positive
+          // lines) and any leftover banked credit (the one negative line, if
+          // present) separately, rather than just summing the whole thing —
+          // a subscriber with more credit than currently due would otherwise
+          // net out to a negative/zero amountDue and silently disappear from
+          // their own dues list with no explanation.
+          const amountDue = remaining.filter(item => item.amount > 0).reduce((s, item) => s + item.amount, 0);
+          const creditLine = remaining.find(item => item.amount < 0);
+          const creditBalance = creditLine ? -creditLine.amount : 0;
 
-          if (amountDue > 0) {
+          if (amountDue > 0 || creditBalance > 0) {
             dues.push({
               proUserId: row.user_id,
               contributorId: contributor.id,
@@ -85,6 +94,7 @@ router.get('/pro/lookup-dues', rateLimit(20, 10 * 60000), async (req, res) => {
               targetCategory: target.category,
               contributorName: contributor.name,
               amountDue,
+              creditBalance,
               currency: currencyByUserId[row.user_id] || 'INR'
             });
           }
