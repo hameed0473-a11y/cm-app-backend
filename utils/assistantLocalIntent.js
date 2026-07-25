@@ -28,7 +28,7 @@ const CURRENCY_WORDS = {
   'australian dollar': 'AUD', 'canadian dollar': 'CAD', 'south african rand': 'ZAR', francs: 'CHF', franc: 'CHF'
 };
 
-const AMOUNT_RE = /(?:target|amount)\s*(?:of)?\s*(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)|(?:₹|\$|rs\.?)\s*(\d+(?:\.\d+)?)/i;
+const AMOUNT_RE = /(?:target|amount)\s*(?:of)?\s*(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)|(?:₹|\$|£|€|rs\.?)\s*(\d+(?:\.\d+)?)/i;
 
 function extractAmount(msg) {
   const m = msg.match(AMOUNT_RE);
@@ -55,11 +55,11 @@ function extractGoalName(msg) {
 
 function parseCollectPayment(msg) {
   // "collect 500 from Ramesh for Diwali Fund"
-  let m = msg.match(/(?:collect(?:ed)?|record(?:ed)?|received)\s+(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)\s+from\s+([a-z0-9 .'-]+?)\s+for\s+([a-z0-9 &.'-]+?)[.?!]*$/i);
+  let m = msg.match(/(?:collect(?:ed)?|record(?:ed)?|received)\s+(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)\s+from\s+([a-z0-9 .'-]+?)\s+for\s+([a-z0-9 &.'-]+?)[.?!]*$/i);
   if (m) return { amount: Number(m[1]) || 0, subscriberName: m[2].trim(), goalName: m[3].trim() };
 
   // "collect 500 from Ramesh" (goal not stated — the app will show a dues list to pick from)
-  m = msg.match(/(?:collect(?:ed)?|record(?:ed)?|received)\s+(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)\s+from\s+([a-z0-9 .'-]+?)[.?!]*$/i);
+  m = msg.match(/(?:collect(?:ed)?|record(?:ed)?|received)\s+(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)\s+from\s+([a-z0-9 .'-]+?)[.?!]*$/i);
   if (m) return { amount: Number(m[1]) || 0, subscriberName: m[2].trim(), goalName: '' };
 
   return null;
@@ -90,7 +90,7 @@ function extractGoalMention(msg) {
 // trailing "at <amount>" clause so the remaining text (goal name, etc.)
 // parses cleanly, and reports whichever amount it found either way.
 function stripTrailingAmount(msg) {
-  const m = msg.match(/^(.*?)\s+\bat\s+(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)(?:\s*(?:per\s*(?:month|year|period))?)?[.?!]*$/i);
+  const m = msg.match(/^(.*?)\s+\bat\s+(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)(?:\s*(?:per\s*(?:month|year|period))?)?[.?!]*$/i);
   if (m) return { rest: m[1].trim(), amount: Number(m[2]) || 0 };
   return { rest: msg, amount: extractAmount(msg) };
 }
@@ -99,7 +99,7 @@ function stripTrailingAmount(msg) {
 // our own "how much should X pay?" question) — accepts a bare number, an
 // "at <number>" reply, or a currency-prefixed one.
 function extractBareOrAtAmount(msg) {
-  const m = msg.trim().match(/^(?:at\s+)?(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)\s*(?:per\s*(?:month|year|period))?[.?!]*$/i);
+  const m = msg.trim().match(/^(?:at\s+)?(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)\s*(?:per\s*(?:month|year|period))?[.?!]*$/i);
   if (m) return Number(m[1]) || 0;
   return extractAmount(msg);
 }
@@ -253,7 +253,7 @@ function parseSubscribeToGoal(msg, history) {
 
 // "pledge 1000 for Ramesh towards Diwali Fund"
 function parseCreatePledge(msg) {
-  const m = msg.match(/\bpledge\b\s+(?:of\s+)?(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)\s+for\s+([a-z0-9 .'-]+?)\s+(?:towards|for|to)\s+([a-z0-9 &.'-]+?)[.?!]*$/i);
+  const m = msg.match(/\bpledge\b\s+(?:of\s+)?(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)\s+for\s+([a-z0-9 .'-]+?)\s+(?:towards|for|to)\s+([a-z0-9 &.'-]+?)[.?!]*$/i);
   if (!m) return { reply: 'Try: "pledge 1000 for Ramesh towards Diwali Fund".', handled: true };
   return {
     reply: 'Here\'s what I understood:',
@@ -288,7 +288,7 @@ function parseStopRollover(msg) {
 
 // "add an expense of 2000 for flowers, category event expenses"
 function parseAddExpense(msg) {
-  const amtMatch = msg.match(/(?:expense|spent|paid)\s+(?:of\s+)?(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)/i) || msg.match(/(?:₹|\$|rs\.?)\s*(\d+(?:\.\d+)?)/i);
+  const amtMatch = msg.match(/(?:expense|spent|paid)\s+(?:of\s+)?(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)/i) || msg.match(/(?:₹|\$|£|€|rs\.?)\s*(\d+(?:\.\d+)?)/i);
   const amount = amtMatch ? Number(amtMatch[1]) || 0 : 0;
   if (!amount) return { reply: 'I didn\'t catch the amount. Try: "add an expense of 2000 for flowers".', handled: true };
 
@@ -468,7 +468,7 @@ function detectDeleteTarget(msg) {
   if (/\bpayee\b/i.test(msg)) return 'payee';
   if (/\bexpense\b/i.test(msg)) return 'expense';
   if (/\bpayment\b|\breceipt\b/i.test(msg)) return 'payment';
-  if (/\bunsubscribe\b/i.test(msg)) return 'subscription';
+  if (/\bunsubscribe\b|\bsubscription\b/i.test(msg)) return 'subscription';
   if (/\bgoal\b/i.test(msg) && /\bfrom\b/i.test(msg)) return 'subscription';
   if (/\bgoal\b/i.test(msg)) return 'goal';
   if (/\bsubscriber\b|\bcontributor\b/i.test(msg)) return 'subscriber';
@@ -513,7 +513,7 @@ function parseLocalIntent(message, history) {
   const msg = message.trim();
   const safeHistory = Array.isArray(history) ? history : [];
 
-  if (/\b(delete|remove|unsubscribe)\b/i.test(msg)) {
+  if (/\b(delete|remove|unsubscribe|cancel)\b/i.test(msg)) {
     return handleDeleteIntent(msg);
   }
 
