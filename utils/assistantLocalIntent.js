@@ -262,6 +262,80 @@ function parseRaiseTicket(msg) {
   };
 }
 
+// "change Ramesh's mobile number to 9998887766" / "update Ramesh's name to Suresh"
+function parseEditSubscriber(msg) {
+  let m = msg.match(/(?:change|update|edit)\s+([a-z][a-z0-9 .'-]*?)'s\s+mobile(?:\s+number)?\s+to\s+(\d{6,15})/i);
+  if (m) {
+    return {
+      reply: '[Test mode] Here\'s what I understood:',
+      action: { type: 'edit_subscriber', params: { subscriberName: m[1].trim(), mobile: m[2].trim() } },
+      handled: true
+    };
+  }
+
+  m = msg.match(/(?:change|update|edit)\s+([a-z][a-z0-9 .'-]*?)'s\s+name\s+to\s+([a-z][a-z0-9 .'-]*?)[.?!]*$/i);
+  if (m) {
+    return {
+      reply: '[Test mode] Here\'s what I understood:',
+      action: { type: 'edit_subscriber', params: { subscriberName: m[1].trim(), name: m[2].trim() } },
+      handled: true
+    };
+  }
+
+  return { reply: 'Try: "change Ramesh\'s mobile number to 9998887766" or "change Ramesh\'s name to Suresh".', handled: true };
+}
+
+// "reopen my last support ticket" / "reopen my ticket" — always resolved
+// against the account's own most-recently-solved ticket, never guessed by
+// description (too error-prone from voice), so no name/id extraction here.
+function parseReopenTicket() {
+  return {
+    reply: '[Test mode] Here\'s what I understood:',
+    action: { type: 'reopen_ticket', params: {} },
+    handled: true
+  };
+}
+
+// Read-only report/query intents — answerable entirely from data the
+// dashboard already has loaded (contributors, targets, dues, billing info),
+// so these never need confirmation and never touch the database. The
+// frontend computes the actual answer; this just recognizes the question
+// and picks which metric to compute.
+function parseReportQuery(msg) {
+  let m = msg.match(/(?:what does|how much does)\s+([a-z][a-z0-9 .'-]*?)\s+owe/i) ||
+          msg.match(/\bdue\s*(?:amount)?\s*for\s+([a-z][a-z0-9 .'-]*?)[.?!]*$/i);
+  if (m) {
+    return {
+      reply: '[Test mode] Here\'s what I understood:',
+      action: { type: 'report_query', params: { metric: 'subscriber_due', subscriberName: m[1].trim() } },
+      handled: true
+    };
+  }
+
+  if (/\bhow many subscribers\b|\bsubscriber count\b|\btotal subscribers\b/i.test(msg)) {
+    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'subscriber_count' } }, handled: true };
+  }
+
+  if (/\bpending subscribers\b|\bwho(?:'s| is)?\s*pending\b|\boutstanding\s+(?:subscribers|dues)\b/i.test(msg)) {
+    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'pending_subscribers' } }, handled: true };
+  }
+
+  if (/\bactive goals\b|\blist\b.*\bgoals\b/i.test(msg)) {
+    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'active_goals' } }, handled: true };
+  }
+
+  if (/\b(when does|when is)\b.*\b(renew|subscription|plan)\b/i.test(msg) || /\bmy\s+(current\s+)?(plan|subscription)\b/i.test(msg)) {
+    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'current_plan' } }, handled: true };
+  }
+
+  if (/\b(how much|total)\b.*\bcollect(?:ed)?\b/i.test(msg)) {
+    const period = /\bthis month\b/i.test(msg) ? 'month' : 'all';
+    return { reply: '[Test mode] Here\'s what I understood:', action: { type: 'report_query', params: { metric: 'total_collected', period } }, handled: true };
+  }
+
+  return null;
+}
+
 // "change my currency to USD" / "set currency to euros"
 function parseSetCurrency(msg) {
   const currency = matchCurrency(msg);
@@ -338,7 +412,7 @@ const FAQ = [
   }
 ];
 
-const FALLBACK_REPLY = 'Test mode (no AI key set yet): I can currently handle creating goals, collecting payments, adding subscribers/payees, subscribing someone to a goal, creating a pledge, marking a goal complete, stopping a goal\'s rollover, adding an expense, raising a support ticket, and changing your currency — plus basic how-to questions. Add ANTHROPIC_API_KEY on the backend to unlock full understanding.';
+const FALLBACK_REPLY = 'Test mode (no AI key set yet): I can currently handle creating goals, collecting payments, adding/editing subscribers, subscribing someone to a goal, creating a pledge, marking a goal complete, stopping a goal\'s rollover, adding an expense/payee, raising or reopening a support ticket, changing your currency, and answering questions like "how much have I collected", "who\'s pending", "what does X owe", "list my active goals", "how many subscribers do I have", and "when does my subscription renew" — plus basic how-to questions. Add ANTHROPIC_API_KEY on the backend to unlock full understanding.';
 
 function parseLocalIntent(message, history) {
   const msg = message.trim();
@@ -375,12 +449,20 @@ function parseLocalIntent(message, history) {
     return parseAddPayee(msg);
   }
 
-  if (/\bticket\b/i.test(msg) && /\b(raise|open|create|submit)\b/i.test(msg) && !/\breopen\b/i.test(msg)) {
+  if (/\bticket\b/i.test(msg) && /\breopen\b/i.test(msg)) {
+    return parseReopenTicket();
+  }
+
+  if (/\bticket\b/i.test(msg) && /\b(raise|open|create|submit)\b/i.test(msg)) {
     return parseRaiseTicket(msg);
   }
 
   if (/\bcurrency\b/i.test(msg) && /\b(change|set|switch)\b/i.test(msg)) {
     return parseSetCurrency(msg);
+  }
+
+  if (/'s\s+(?:mobile(?:\s+number)?|name)\s+to\b/i.test(msg) && /\b(change|update|edit)\b/i.test(msg)) {
+    return parseEditSubscriber(msg);
   }
 
   const wantsCollect = /\b(collect(?:ed)?|record(?:ed)?|received)\b/i.test(msg) && /\bfrom\b/i.test(msg);
@@ -413,6 +495,9 @@ function parseLocalIntent(message, history) {
       handled: true
     };
   }
+
+  const reportResult = parseReportQuery(msg);
+  if (reportResult) return reportResult;
 
   const faqHit = FAQ.find(item => item.test.test(msg));
   if (faqHit) return { reply: faqHit.reply, handled: true };
