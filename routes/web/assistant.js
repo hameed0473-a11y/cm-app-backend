@@ -329,11 +329,12 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
         max_tokens: 400,
         // Cached: this system prompt + the tool list are identical on every
         // request (same account, same code) — caching the last system block
-        // covers both (render order is tools -> system -> messages), so only
-        // the ~1st request per 5-minute window pays full price for this
-        // ~4,400-token prefix. Everything after it (conversation history,
-        // the new message) still bills normally, as it should.
-        system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+        // covers both (render order is tools -> system -> messages). 1-hour
+        // TTL (not the 5-minute default) because real usage here is a
+        // treasurer asking occasional questions minutes apart while working
+        // through the dashboard, not rapid-fire messages — the 5-minute
+        // window mostly expired before a second question ever landed.
+        system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral', ttl: '1h' } }],
         tools: TOOLS,
         messages
       })
