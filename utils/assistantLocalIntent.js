@@ -1319,7 +1319,7 @@ const FALLBACK_REPLY = 'Test mode (no AI key set yet): I can currently handle cr
 // from the history turn immediately before this menu was asked.
 // ---------------------------------------------------------------
 const GOAL_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a goal. Please choose one:\n1. Create a goal\n2. Delete a goal\n3. Add/remove subscribers on a goal\n4. How to add a goal (steps)\n5. Something else — I\'ll pass this to the AI';
-const GOAL_MENU_RE = /^i'm not quite sure what you'd like to do with a goal\. please choose one:/i;
+const GOAL_MENU_RE = /i'm not quite sure what you'd like to do with a goal\. please choose one:/i;
 PENDING_FLOW_MARKERS.push(GOAL_MENU_RE);
 
 const GOAL_MENU_SUBSCRIBER_STEPS_REPLY = 'I can\'t add or remove subscribers on a goal through this menu — please say "add a subscriber" or "subscribe <name> to <goal>" directly, or use Sidebar -> Subscribers / open the goal itself.';
@@ -1335,14 +1335,19 @@ function parseGoalFallbackMenu(msg, history) {
     if (/^1\b/.test(choice) || (/\bcreate\b/i.test(choice) && !/\bdelete\b/i.test(choice))) {
       return { reply: 'Great — what should the goal be named?', handled: true };
     }
+    // Options 2-4 are terminal (no further flow to hand off into) — the
+    // menu is re-appended after each so the next reply ("2", "4", etc.)
+    // still has the menu question as the last assistant turn to match
+    // against, instead of falling through to Claude with nothing to go on.
     if (/^2\b/.test(choice) || /\bdelete\b/i.test(choice)) {
-      return handleDeleteIntent('delete goal');
+      const deleteResult = handleDeleteIntent('delete goal');
+      return { reply: `${deleteResult.reply}\n\n${GOAL_MENU_QUESTION}`, handled: true };
     }
     if (/^3\b/.test(choice) || /\b(subscriber|subscribe|unsubscribe)\b/i.test(choice)) {
-      return { reply: GOAL_MENU_SUBSCRIBER_STEPS_REPLY, handled: true };
+      return { reply: `${GOAL_MENU_SUBSCRIBER_STEPS_REPLY}\n\n${GOAL_MENU_QUESTION}`, handled: true };
     }
     if (/^4\b/.test(choice) || /\bhow\b/i.test(choice)) {
-      return { reply: GOAL_MENU_HOWTO_REPLY, handled: true };
+      return { reply: `${GOAL_MENU_HOWTO_REPLY}\n\n${GOAL_MENU_QUESTION}`, handled: true };
     }
     if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
       const menuIndex = safeHistory.indexOf(lastAssistant);
@@ -1374,7 +1379,7 @@ function parseGoalFallbackMenu(msg, history) {
 // clicked), not by anything the backend needs to compute itself.
 // ---------------------------------------------------------------
 const COLLECT_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do regarding a payment. Please choose one:\n1. Collect payment (generate a payment link)\n2. Download the receipt\n3. Delete the payment/receipt\n4. How to pay the amount\n5. Something else — I\'ll pass this to the AI';
-const COLLECT_MENU_RE = /^i'm not quite sure what you'd like to do regarding a payment\. please choose one:/i;
+const COLLECT_MENU_RE = /i'm not quite sure what you'd like to do regarding a payment\. please choose one:/i;
 PENDING_FLOW_MARKERS.push(COLLECT_MENU_RE);
 
 const COLLECT_MENU_HOWTO_REPLY = 'Open the relevant goal or subscriber (or the Pending tab) -> "Collect Payment" -> enter the amount -> Save. Or just say "collect 500 from <name> for <goal>" and I\'ll do it for you.';
@@ -1387,9 +1392,13 @@ function parseCollectFallbackMenu(msg, history) {
     const choice = msg.trim().toLowerCase();
 
     // Delete checked first — "delete the receipt" would otherwise also
-    // match option 2's bare /receipt/ keyword below.
+    // match option 2's bare /receipt/ keyword below. Only options 3 and 4
+    // are terminal (1 and 2 hand off into their own multi-step flows) — the
+    // menu is re-appended after each terminal reply so the next pick still
+    // has something to match against instead of falling through to Claude.
     if (/^3\b/.test(choice) || /\bdelete\b/i.test(choice)) {
-      return handleDeleteIntent('delete payment');
+      const deleteResult = handleDeleteIntent('delete payment');
+      return { reply: `${deleteResult.reply}\n\n${COLLECT_MENU_QUESTION}`, handled: true };
     }
     if (/^1\b/.test(choice) || /\bcollect\b/i.test(choice)) {
       return { reply: 'Great — what\'s the subscriber\'s mobile number so I can look up their due and generate the link?', handled: true };
@@ -1398,7 +1407,7 @@ function parseCollectFallbackMenu(msg, history) {
       return { reply: 'Great — what\'s the subscriber\'s mobile number so I can find their receipt?', handled: true };
     }
     if (/^4\b/.test(choice) || /\bhow\b/i.test(choice)) {
-      return { reply: COLLECT_MENU_HOWTO_REPLY, handled: true };
+      return { reply: `${COLLECT_MENU_HOWTO_REPLY}\n\n${COLLECT_MENU_QUESTION}`, handled: true };
     }
     if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
       const menuIndex = safeHistory.indexOf(lastAssistant);
@@ -1441,7 +1450,7 @@ function parseCollectFallbackMenu(msg, history) {
 // to Claude needs its own slot distinct from "edit subscriber details".
 // ---------------------------------------------------------------
 const SUBSCRIBER_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a subscriber. Please choose one:\n1. Add subscriber\n2. View subscriber details\n3. Delete/remove the subscriber\n4. How to add a subscriber\n5. Edit subscriber details\n6. Something else — I\'ll pass this to the AI';
-const SUBSCRIBER_MENU_RE = /^i'm not quite sure what you'd like to do with a subscriber\. please choose one:/i;
+const SUBSCRIBER_MENU_RE = /i'm not quite sure what you'd like to do with a subscriber\. please choose one:/i;
 PENDING_FLOW_MARKERS.push(SUBSCRIBER_MENU_RE);
 
 const SUBSCRIBER_MENU_HOWTO_REPLY = 'Sidebar -> Subscribers -> "+ Add" -> enter a name and mobile number -> Save. Or just say "add a subscriber" and I\'ll walk you through it.';
@@ -1494,8 +1503,13 @@ function parseSubscriberFallbackMenu(msg, history) {
 
     // Delete and edit checked first — both mention "subscriber"/"details"
     // in ways that could otherwise be caught by the plainer add/view checks.
+    // Options 2-4 are terminal (1 and 5 hand off into their own multi-step
+    // flows) — the menu is re-appended after each so the next pick still
+    // has the menu question to match against instead of falling through
+    // to Claude.
     if (/^3\b/.test(choice) || /\b(delete|remove)\b/i.test(choice)) {
-      return handleDeleteIntent('delete subscriber');
+      const deleteResult = handleDeleteIntent('delete subscriber');
+      return { reply: `${deleteResult.reply}\n\n${SUBSCRIBER_MENU_QUESTION}`, handled: true };
     }
     if (/^5\b/.test(choice) || /\bedit\b/i.test(choice)) {
       return { reply: 'Great — what\'s the subscriber\'s name and mobile number, so I can look up their details?', handled: true };
@@ -1504,10 +1518,10 @@ function parseSubscriberFallbackMenu(msg, history) {
       return { reply: 'Great — what\'s the subscriber\'s name?', handled: true };
     }
     if (/^2\b/.test(choice) || /\bview\b|\bdetails\b/i.test(choice)) {
-      return { reply: 'Opening Subscriber Details for you.', action: { type: 'view_subscriber_details', params: {} }, handled: true };
+      return { reply: `Opening Subscriber Details for you.\n\n${SUBSCRIBER_MENU_QUESTION}`, action: { type: 'view_subscriber_details', params: {} }, handled: true };
     }
     if (/^4\b/.test(choice) || /\bhow\b/i.test(choice)) {
-      return { reply: SUBSCRIBER_MENU_HOWTO_REPLY, handled: true };
+      return { reply: `${SUBSCRIBER_MENU_HOWTO_REPLY}\n\n${SUBSCRIBER_MENU_QUESTION}`, handled: true };
     }
     if (/^6\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
       const menuIndex = safeHistory.indexOf(lastAssistant);
