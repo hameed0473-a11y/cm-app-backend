@@ -59,6 +59,12 @@ You can perform these actions directly using tools, instead of just explaining t
 - reopen_ticket: reopens the account's most recently solved support ticket.
 - set_currency: changes the account's collection currency.
 - edit_subscriber: updates an existing subscriber's mobile number or name.
+- link_payee_category / unlink_payee_category: associates or removes a payee's link to a spending category.
+- update_profile: updates the account's type (individual/organization), category, and/or currency.
+- add_staff: adds a new staff account with limited access.
+- toggle_staff: enables or disables an existing staff account.
+- create_payment_link: generates a shareable payment link for a subscriber, optionally for a specific goal.
+- send_whatsapp_reminders: sends bulk WhatsApp payment reminders, either to everyone with a pending due or for one specific goal.
 - report_query: answers a read-only question from data already loaded (totals, dues, counts, plan info) — never a write.
 
 Rules for each tool:
@@ -74,6 +80,12 @@ Rules for each tool:
 - reopen_ticket: no parameters — always reopens the account's own last solved ticket. Never ask which ticket; there is only ever one target.
 - set_currency: needs a currency from: INR, USD, GBP, EUR, AUD, CAD, SGD, AED, NZD, CHF, ZAR, MYR, SAR, HKD.
 - edit_subscriber: needs a subscriber name (to look them up) and at least one of a new mobile number or a new name. Ask for whichever is missing.
+- link_payee_category / unlink_payee_category: needs a payee name and a category. A payee can have multiple categories, so linking and unlinking are separate tools.
+- update_profile: any of accountType (individual/organization), category, or currency — whichever the user wants changed. All are optional in a single call; omit fields the user didn't mention (the app fills those in from the current value), but never call this tool with all three omitted.
+- add_staff: needs a name and email address; mobile number is optional (ask once, and proceed without it if the user has none to give). Never ask the user for a password — the app generates one automatically.
+- toggle_staff: needs the staff member's name and whether to enable or disable them.
+- create_payment_link: needs a subscriber name; goalName is optional (omit if the user didn't mention a specific goal).
+- send_whatsapp_reminders: goalName is optional — omit it entirely to mean "everyone with a pending due" (the app's own "remind all" convention); include it only if the user named a specific goal.
 - report_query: needs a metric — one of: total_collected (optionally scoped to "month"), pending_subscribers, subscriber_due (needs subscriberName), active_goals, subscriber_count, current_plan. Pick the metric that matches what the user asked; never guess a subscriber name for subscriber_due.
 - Never guess a name, amount, or category the user didn't say — ask a short clarifying question in plain text instead of calling a tool with incomplete information (except raise_ticket's category, which may default to "other").
 
@@ -81,7 +93,7 @@ You must NEVER delete, remove, cancel, or unsubscribe anything — there is no t
 
 You have NO direct access to this account's actual data — no list of contributors, goals, payments, or balances. The ONLY way to state a real number, name, date, or amount from their account is by calling report_query with one of its six metrics (total_collected, pending_subscribers, subscriber_due, active_goals, subscriber_count, current_plan) — that tool's result is filled in separately by the app, not shown to you. NEVER state a specific figure or fact about their account from memory or by estimating — that is always a guess, not a real answer, even if it sounds plausible. If a data question doesn't fit one of those six metrics (e.g. "who's my top donor this year", "what did Ramesh pay last month"), say plainly that you don't have that specific report yet and point them to the relevant dashboard section (Subscriber Details, Pending, Accounting, etc.) instead of guessing a number.
 
-You can ONLY perform the actions listed under "You can perform these actions directly using tools" above — there is no tool for generating a payment link, sending bulk WhatsApp reminders, managing staff accounts, linking/unlinking a payee to a category, or updating the account profile. If asked for one of these (or anything else with no matching tool), say plainly that the assistant doesn't support that action yet, and briefly point to the relevant sidebar section for doing it manually — never claim to have done it, and never improvise by calling a different tool that doesn't actually match what was asked.
+You can ONLY perform the actions listed under "You can perform these actions directly using tools" above. If asked for anything else with no matching tool, say plainly that the assistant doesn't support that action yet, and briefly point to the relevant sidebar section for doing it manually — never claim to have done it, and never improvise by calling a different tool that doesn't actually match what was asked.
 
 For anything else (how something works, setup steps, general questions), answer directly instead of using a tool:
 
@@ -267,6 +279,89 @@ const TOOLS = [
     name: 'reopen_ticket',
     description: "Reopen the account's most recently solved support ticket. Takes no parameters.",
     input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'link_payee_category',
+    description: 'Link an existing payee to a spending category. A payee can have multiple categories.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        payeeName: { type: 'string', description: "The payee's name." },
+        category: { type: 'string', description: 'The category to link them to.' }
+      },
+      required: ['payeeName', 'category']
+    }
+  },
+  {
+    name: 'unlink_payee_category',
+    description: 'Remove an existing link between a payee and a spending category.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        payeeName: { type: 'string', description: "The payee's name." },
+        category: { type: 'string', description: 'The category to unlink them from.' }
+      },
+      required: ['payeeName', 'category']
+    }
+  },
+  {
+    name: 'update_profile',
+    description: "Update the account's type (individual/organization), category, and/or currency.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        accountType: { type: 'string', enum: ['individual', 'organization'], description: 'Only if the user wants this changed.' },
+        category: { type: 'string', description: 'Only if the user wants this changed.' },
+        currency: { type: 'string', enum: ['INR', 'USD', 'GBP', 'EUR', 'AUD', 'CAD', 'SGD', 'AED', 'NZD', 'CHF', 'ZAR', 'MYR', 'SAR', 'HKD'], description: 'Only if the user wants this changed.' }
+      }
+    }
+  },
+  {
+    name: 'add_staff',
+    description: 'Add a new staff account with limited dashboard access. Never ask the user for a password — one is generated automatically.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: "The new staff member's name." },
+        email: { type: 'string', description: "The new staff member's email address." },
+        mobile: { type: 'string', description: 'Optional mobile number.' }
+      },
+      required: ['name', 'email']
+    }
+  },
+  {
+    name: 'toggle_staff',
+    description: 'Enable or disable an existing staff account.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        staffName: { type: 'string', description: "The staff member's name." },
+        enable: { type: 'boolean', description: 'true to enable, false to disable.' }
+      },
+      required: ['staffName', 'enable']
+    }
+  },
+  {
+    name: 'create_payment_link',
+    description: 'Generate a shareable payment link for a subscriber, optionally scoped to one goal.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        subscriberName: { type: 'string', description: "The subscriber's name or mobile number." },
+        goalName: { type: 'string', description: 'Optional — only if the user named a specific goal.' }
+      },
+      required: ['subscriberName']
+    }
+  },
+  {
+    name: 'send_whatsapp_reminders',
+    description: 'Send bulk WhatsApp payment reminders — to everyone with a pending due, or for one specific goal.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        goalName: { type: 'string', description: 'Optional — omit entirely to mean "everyone with a pending due".' }
+      }
+    }
   },
   {
     name: 'report_query',
