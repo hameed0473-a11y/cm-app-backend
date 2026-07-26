@@ -771,6 +771,331 @@ function parseEditSubscriber(msg, history) {
   return null;
 }
 
+// Steps: confirm -> which payee -> which category -> link or unlink. A
+// payee can have several categories at once (it's an array on the backend,
+// see routes/web/expenses.js), so this is one flow with a branch at the
+// end rather than two separate ones.
+const PAYEE_CATEGORY_CONFIRM_RE = /are you saying you'd like to (?:link|unlink) a payee (?:to|from) a category/i;
+const PAYEE_CATEGORY_WHICH_PAYEE_RE = /^great — which payee, and (?:should i link them to|should i remove them from) which category\?$/i;
+PENDING_FLOW_MARKERS.push(PAYEE_CATEGORY_CONFIRM_RE, PAYEE_CATEGORY_WHICH_PAYEE_RE);
+
+const GENERIC_PAYEE_OR_CATEGORY_WORDS_RE = /^(?:a|the|this|that|my|our|it|some)\s*(?:payee|category)?$/i;
+
+function parsePayeeCategory(msg, history) {
+  // Fast path — "link XYZ Supplies to the Flowers category" / "unlink XYZ
+  // Supplies from Maintenance". Guarded against generic phrasing like "link a
+  // payee to a category" (a question, not a real instruction) being mistaken
+  // for real payee/category names.
+  let fastMatch = msg.match(/\blink\b\s+([a-z0-9 .'&-]+?)\s+to\s+(?:the\s+)?([a-z0-9 &]+?)(?:\s+category)?[.?!]*$/i);
+  if (fastMatch && !GENERIC_PAYEE_OR_CATEGORY_WORDS_RE.test(fastMatch[1].trim()) && !GENERIC_PAYEE_OR_CATEGORY_WORDS_RE.test(fastMatch[2].trim())) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'link_payee_category', params: { payeeName: fastMatch[1].trim(), category: fastMatch[2].trim() } }, handled: true };
+  }
+  fastMatch = msg.match(/\bunlink\b\s+([a-z0-9 .'&-]+?)\s+from\s+(?:the\s+)?([a-z0-9 &]+?)(?:\s+category)?[.?!]*$/i);
+  if (fastMatch && !GENERIC_PAYEE_OR_CATEGORY_WORDS_RE.test(fastMatch[1].trim()) && !GENERIC_PAYEE_OR_CATEGORY_WORDS_RE.test(fastMatch[2].trim())) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'unlink_payee_category', params: { payeeName: fastMatch[1].trim(), category: fastMatch[2].trim() } }, handled: true };
+  }
+
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 2: answering "which payee, and which category?" — expects
+  // something like "XYZ Supplies, Maintenance" (link) or the same for unlink,
+  // remembering which direction (link/unlink) from the confirm question.
+  if (lastAssistant && PAYEE_CATEGORY_WHICH_PAYEE_RE.test(lastAssistant.content)) {
+    const isUnlink = /remove them from/i.test(lastAssistant.content);
+    const parts = msg.split(',');
+    const payeeName = (parts[0] || '').trim();
+    const category = (parts[1] || '').replace(/[.?!]+$/, '').trim();
+    if (!payeeName || !category) {
+      return { reply: `Which payee, and ${isUnlink ? 'which category should I remove them from' : 'which category should I link them to'}? Reply like "XYZ Supplies, Maintenance".`, handled: true };
+    }
+    return {
+      reply: 'Here\'s what I understood:',
+      action: { type: isUnlink ? 'unlink_payee_category' : 'link_payee_category', params: { payeeName, category } },
+      handled: true
+    };
+  }
+
+  // Step 1 (confirm) — remembers link vs unlink for the next question's wording
+  if (lastAssistant && PAYEE_CATEGORY_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    const isUnlink = /unlink/i.test(lastAssistant.content);
+    return { reply: `Great — which payee, and ${isUnlink ? 'should I remove them from which category' : 'should I link them to which category'}?`, handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bpayee\b/i.test(msg) && /\bcategory\b|\bcategories\b/i.test(msg) && /\b(link|unlink|remove|associate)\b/i.test(msg)) {
+    const isUnlink = /\b(unlink|remove)\b/i.test(msg);
+    return { reply: `Are you saying you'd like to ${isUnlink ? 'unlink a payee from a category' : 'link a payee to a category'}?`, handled: true };
+  }
+
+  return null;
+}
+
+// Steps: confirm -> one free-form follow-up covering whichever of account
+// type (individual/organization), category, and currency the user wants to
+// change — all three are optional in that single reply (say as many as
+// apply), and any field left unmentioned is filled in from the account's
+// current value by the frontend, not guessed here.
+const UPDATE_PROFILE_CONFIRM_RE = /are you saying you'd like to update your account profile/i;
+const UPDATE_PROFILE_WHAT_RE = /^great — what would you like to update\? tell me the account type/i;
+PENDING_FLOW_MARKERS.push(UPDATE_PROFILE_CONFIRM_RE, UPDATE_PROFILE_WHAT_RE);
+
+function parseUpdateProfile(msg, history) {
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 2: answering "what would you like to update?"
+  if (lastAssistant && UPDATE_PROFILE_WHAT_RE.test(lastAssistant.content)) {
+    let accountType;
+    if (/\borgani[sz]ation\b/i.test(msg)) accountType = 'organization';
+    else if (/\bindividual\b/i.test(msg)) accountType = 'individual';
+
+    const currency = matchCurrency(msg);
+
+    let category = msg
+      .replace(/\b(organi[sz]ation|individual)\b/gi, '')
+      .replace(new RegExp(`\\b(${SUPPORTED_CURRENCIES.join('|')})\\b`, 'gi'), '')
+      .replace(/\bcategory\b|\bcurrency\b|\baccount type\b/gi, '')
+      .replace(/[,.]/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (!category) category = undefined;
+
+    if (!accountType && !currency && !category) {
+      return { reply: 'What would you like to update — account type (individual/organization), category, and/or currency?', handled: true };
+    }
+    return { reply: 'Here\'s what I understood:', action: { type: 'update_profile', params: { accountType, category, currency } }, handled: true };
+  }
+
+  // Step 1 (confirm)
+  if (lastAssistant && UPDATE_PROFILE_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — what would you like to update? Tell me the account type (individual/organization), category, and/or currency — whatever\'s changing.', handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\b(update|change|edit)\b/i.test(msg) && /\bprofile\b|\baccount\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to update your account profile?', handled: true };
+  }
+
+  return null;
+}
+
+// Steps: confirm -> name -> email -> mobile (optional). The password is
+// never asked for through chat — a random one is generated once everything
+// else is known, and shown back in the confirmation so the treasurer can
+// share it with the new staff member. Typing a password into a chat box
+// is exactly the kind of thing this avoids on purpose.
+const ADD_STAFF_CONFIRM_RE = /are you saying you'd like to add a new staff account/i;
+const ADD_STAFF_NAME_RE = /^great — what's the new staff member's name\?$/i;
+const ADD_STAFF_EMAIL_RE = /^what's (.+?)'s email address\?$/i;
+const ADD_STAFF_MOBILE_RE = /^\(optional\) what's (.+?)'s mobile number\? reply "skip" if you'd rather leave it blank\.$/i;
+PENDING_FLOW_MARKERS.push(ADD_STAFF_CONFIRM_RE, ADD_STAFF_NAME_RE, ADD_STAFF_EMAIL_RE, ADD_STAFF_MOBILE_RE);
+
+function generateStaffPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let out = '';
+  for (let i = 0; i < 10; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+function parseAddStaff(msg, history) {
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 4: answering the (optional) mobile question
+  if (lastAssistant && ADD_STAFF_MOBILE_RE.test(lastAssistant.content)) {
+    const name = lastAssistant.content.match(ADD_STAFF_MOBILE_RE)[1];
+    const skip = /^\s*skip\b/i.test(msg);
+    const mobileMatch = msg.match(/\d{6,15}/);
+    if (!skip && !mobileMatch) return { reply: `(optional) What's ${name}'s mobile number? Reply "skip" if you'd rather leave it blank.`, handled: true };
+    // Email was asked (and answered) one step earlier — recover it from
+    // that question's own text plus the user's reply to it.
+    let recoveredEmail = '';
+    for (let i = (history || []).length - 1; i >= 0; i--) {
+      const h = history[i];
+      if (h.role === 'assistant' && ADD_STAFF_EMAIL_RE.test(h.content)) {
+        const next = history[i + 1];
+        if (next && next.role === 'user') recoveredEmail = next.content.trim();
+        break;
+      }
+    }
+    const password = generateStaffPassword();
+    return {
+      reply: 'Here\'s what I understood:',
+      action: { type: 'add_staff', params: { name, email: recoveredEmail, mobile: skip ? undefined : mobileMatch[0], password } },
+      handled: true
+    };
+  }
+
+  // Step 3: answering "what's X's email address?"
+  if (lastAssistant && ADD_STAFF_EMAIL_RE.test(lastAssistant.content)) {
+    const name = lastAssistant.content.match(ADD_STAFF_EMAIL_RE)[1];
+    const emailMatch = msg.match(/[^\s@]+@[^\s@]+\.[^\s@]+/);
+    if (!emailMatch) return { reply: `What's ${name}'s email address?`, handled: true };
+    return { reply: `(optional) What's ${name}'s mobile number? Reply "skip" if you'd rather leave it blank.`, handled: true };
+  }
+
+  // Step 2: answering "what's the new staff member's name?"
+  if (lastAssistant && ADD_STAFF_NAME_RE.test(lastAssistant.content)) {
+    const name = msg.replace(/[.?!]+$/, '').trim();
+    if (!name) return { reply: 'What\'s the new staff member\'s name?', handled: true };
+    return { reply: `What's ${name}'s email address?`, handled: true };
+  }
+
+  // Step 1 (confirm)
+  if (lastAssistant && ADD_STAFF_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — what\'s the new staff member\'s name?', handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bstaff\b/i.test(msg) && /\b(add|create|register|new)\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to add a new staff account?', handled: true };
+  }
+
+  return null;
+}
+
+// Steps: confirm -> which staff member -> enable or disable. Removing
+// staff is destructive and stays refused (see DELETE_STEPS/'staff' below)
+// — only enable/disable (a reversible status flip) is a real action here.
+const TOGGLE_STAFF_CONFIRM_RE = /are you saying you'd like to enable or disable a staff account/i;
+const TOGGLE_STAFF_WHICH_RE = /^great — which staff member, and should i enable or disable them\?$/i;
+PENDING_FLOW_MARKERS.push(TOGGLE_STAFF_CONFIRM_RE, TOGGLE_STAFF_WHICH_RE);
+
+const TOGGLE_STAFF_BAD_NAME_RE = /\b(or|enable|disable|activate|deactivate)\b/i;
+
+function parseToggleStaff(msg, history) {
+  // Fast path — "disable Priya's staff account" / "enable Priya as staff".
+  // Guarded against generic trigger phrasing like "enable or disable staff"
+  // (a question, not a real instruction naming someone) being mistaken for
+  // a real staff name, and against "as" being swallowed into the name.
+  let fastMatch = msg.match(/\b(disable|deactivate)\b\s+([a-z0-9 .'-]+?)(?:'s|\s+as)?\s+staff\b/i);
+  if (fastMatch && !TOGGLE_STAFF_BAD_NAME_RE.test(fastMatch[2].trim())) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'toggle_staff', params: { staffName: fastMatch[2].trim(), enable: false } }, handled: true };
+  }
+  fastMatch = msg.match(/\b(enable|activate|reactivate)\b\s+([a-z0-9 .'-]+?)(?:'s|\s+as)?\s+staff\b/i);
+  if (fastMatch && !TOGGLE_STAFF_BAD_NAME_RE.test(fastMatch[2].trim())) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'toggle_staff', params: { staffName: fastMatch[2].trim(), enable: true } }, handled: true };
+  }
+
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 2: answering "which staff member, and enable or disable?"
+  if (lastAssistant && TOGGLE_STAFF_WHICH_RE.test(lastAssistant.content)) {
+    const isEnable = /\benable|activate\b/i.test(msg);
+    const isDisable = /\bdisable|deactivate\b/i.test(msg);
+    const staffName = msg.replace(/\b(enable|disable|activate|deactivate)\b/gi, '').replace(/[,.]/g, '').trim();
+    if (!staffName) return { reply: 'Which staff member, and should I enable or disable them?', handled: true };
+    if (!isEnable && !isDisable) return { reply: `Should I enable or disable ${staffName}?`, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'toggle_staff', params: { staffName, enable: isEnable } }, handled: true };
+  }
+
+  // Step 1 (confirm)
+  if (lastAssistant && TOGGLE_STAFF_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — which staff member, and should I enable or disable them?', handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bstaff\b/i.test(msg) && /\b(enable|disable|activate|deactivate)\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to enable or disable a staff account?', handled: true };
+  }
+
+  return null;
+}
+
+// Steps: confirm -> who -> which goal (optional, mirrors collect_payment's
+// "omit it and the app shows a dues list to pick from" behavior). The
+// actual gateway-connected check happens server-side when the frontend
+// calls /pro/create-payment-link — this flow just gathers who/what.
+const PAYMENT_LINK_CONFIRM_RE = /are you saying you'd like to generate a payment link/i;
+const PAYMENT_LINK_WHO_RE = /^great — who should the payment link be for\?$/i;
+PENDING_FLOW_MARKERS.push(PAYMENT_LINK_CONFIRM_RE, PAYMENT_LINK_WHO_RE);
+
+const PAYMENT_LINK_FAKE_GOAL_RE = /^(?:his|her|their|its)\s+(?:due|dues|payment|account)s?$/i;
+
+function parseCreatePaymentLink(msg, history) {
+  // Fast path — "send Ramesh a payment link for Diwali Fund" (subscriber
+  // named right after "send", before "a payment link").
+  let fastMatch = msg.match(/\bsend\s+([a-z0-9 .'-]+?)\s+a\s+payment link\b(?:\s+for\s+([a-z0-9 &.'-]+?))?[.?!]*$/i);
+  if (fastMatch && fastMatch[1]) {
+    const goalName = fastMatch[2] && !PAYMENT_LINK_FAKE_GOAL_RE.test(fastMatch[2].trim()) ? fastMatch[2].trim() : undefined;
+    return { reply: 'Here\'s what I understood:', action: { type: 'create_payment_link', params: { subscriberName: fastMatch[1].trim(), goalName } }, handled: true };
+  }
+  // Fast path — "generate a payment link for Ramesh for Diwali Fund" /
+  // "payment link for Ramesh"
+  fastMatch = msg.match(/(?:payment link)\b.*?\bfor\s+([a-z0-9 .'-]+?)(?:\s+for\s+([a-z0-9 &.'-]+?))?[.?!]*$/i);
+  if (fastMatch && fastMatch[1]) {
+    const goalName = fastMatch[2] && !PAYMENT_LINK_FAKE_GOAL_RE.test(fastMatch[2].trim()) ? fastMatch[2].trim() : undefined;
+    return { reply: 'Here\'s what I understood:', action: { type: 'create_payment_link', params: { subscriberName: fastMatch[1].trim(), goalName } }, handled: true };
+  }
+
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 2: answering "who should the payment link be for?" — goal name is
+  // optional in the same reply ("Ramesh for Diwali Fund" or just "Ramesh").
+  if (lastAssistant && PAYMENT_LINK_WHO_RE.test(lastAssistant.content)) {
+    const m = msg.match(/^([a-z0-9 .'-]+?)(?:\s+for\s+([a-z0-9 &.'-]+?))?[.?!]*$/i);
+    const subscriberName = m ? m[1].trim() : msg.replace(/[.?!]+$/, '').trim();
+    if (!subscriberName) return { reply: 'Who should the payment link be for?', handled: true };
+    const goalName = m && m[2] ? m[2].trim() : undefined;
+    return { reply: 'Here\'s what I understood:', action: { type: 'create_payment_link', params: { subscriberName, goalName } }, handled: true };
+  }
+
+  // Step 1 (confirm)
+  if (lastAssistant && PAYMENT_LINK_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — who should the payment link be for?', handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bpayment link\b/i.test(msg) && !/\bhow\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to generate a payment link?', handled: true };
+  }
+
+  return null;
+}
+
+// Steps: confirm -> which goal (optional — omit for "everyone with any
+// pending due", mirroring the app's own "remind all" convention). The
+// actual send requires the treasurer's own WhatsApp Business API to
+// already be connected — enforced server-side by /web-send-whatsapp-bulk.
+const WHATSAPP_BULK_CONFIRM_RE = /are you saying you'd like to send whatsapp reminders/i;
+const WHATSAPP_BULK_WHICH_RE = /^great — remind everyone with a pending due, or just one goal\? say "everyone" or name the goal\.$/i;
+PENDING_FLOW_MARKERS.push(WHATSAPP_BULK_CONFIRM_RE, WHATSAPP_BULK_WHICH_RE);
+
+function parseSendWhatsappReminders(msg, history) {
+  // Fast path — check for a named goal FIRST (e.g. "...everyone pending on
+  // Diwali Fund" mentions "everyone" but still names a specific goal), then
+  // fall back to the loose "everyone" catch-all with no goal named at all.
+  let fastMatch = msg.match(/\bwhatsapp\b.*?\breminders?\b.*?\b(?:for|on)\s+([a-z0-9 &.'-]+?)[.?!]*$/i);
+  if (fastMatch) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'send_whatsapp_reminders', params: { goalName: fastMatch[1].trim() } }, handled: true };
+  }
+  if (/\bwhatsapp\b.*?\breminders?\b.*?\beveryone\b/i.test(msg)) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'send_whatsapp_reminders', params: {} }, handled: true };
+  }
+
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 2: answering "everyone, or which goal?"
+  if (lastAssistant && WHATSAPP_BULK_WHICH_RE.test(lastAssistant.content)) {
+    if (/^\s*everyone\b/i.test(msg)) {
+      return { reply: 'Here\'s what I understood:', action: { type: 'send_whatsapp_reminders', params: {} }, handled: true };
+    }
+    const goalName = msg.replace(/[.?!]+$/, '').trim();
+    if (!goalName) return { reply: 'Remind everyone with a pending due, or just one goal? Say "everyone" or name the goal.', handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'send_whatsapp_reminders', params: { goalName } }, handled: true };
+  }
+
+  // Step 1 (confirm)
+  if (lastAssistant && WHATSAPP_BULK_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — remind everyone with a pending due, or just one goal? Say "everyone" or name the goal.', handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bwhatsapp\b/i.test(msg) && /\breminders?\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to send WhatsApp reminders?', handled: true };
+  }
+
+  return null;
+}
+
 // "reopen my last support ticket" / "reopen my ticket" — always resolved
 // against the account's own most-recently-solved ticket, never guessed by
 // description (too error-prone from voice), so no name/id extraction here.
@@ -936,6 +1261,38 @@ const FAQ = [
 
 const FALLBACK_REPLY = 'Test mode (no AI key set yet): I can currently handle creating goals, collecting payments, adding/editing subscribers, subscribing someone to a goal, creating a pledge, marking a goal complete, stopping a goal\'s rollover, adding an expense/payee, raising or reopening a support ticket, changing your currency, and answering questions like "how much have I collected", "who\'s pending", "what does X owe", "list my active goals", "how many subscribers do I have", and "when does my subscription renew" — plus basic how-to questions. Add ANTHROPIC_API_KEY on the backend to unlock full understanding.';
 
+// ---------------------------------------------------------------
+// FLOW OWNERSHIP — every confirm-first flow's fast-path check runs
+// unconditionally at the top of its own function, which is fine on a
+// fresh message but dangerous mid-flow: a reply meant as step 2 of one
+// flow could accidentally match a completely different flow's fast path
+// (e.g. a reply containing a currency code, mid-way through an unrelated
+// flow, getting swallowed by set_currency's own always-on fast path).
+// This registry lets parseLocalIntent check "is a specific flow already
+// pending?" first and, if so, dispatch to ONLY that flow's function
+// before anything else gets a chance to misfire on this message.
+// ---------------------------------------------------------------
+const FLOW_OWNERS = [
+  { markers: [CREATE_GOAL_CONFIRM_RE, CREATE_GOAL_NAME_RE, CREATE_GOAL_TYPE_RE], fn: parseCreateGoal },
+  { markers: [ADD_SUBSCRIBER_CONFIRM_RE, ADD_SUBSCRIBER_NAME_RE, ADD_SUBSCRIBER_MOBILE_RE, ADD_SUBSCRIBER_GOAL_OR_NOT_RE, ADD_SUBSCRIBER_AMOUNT_RE], fn: parseAddSubscriber },
+  { markers: [SUBSCRIBE_CONFIRM_RE, SUBSCRIBE_WHO_RE, SUBSCRIBE_GOAL_RE, SUBSCRIBE_AMOUNT_RE], fn: parseSubscribeToGoal },
+  { markers: [CREATE_PLEDGE_CONFIRM_RE, CREATE_PLEDGE_WHO_RE, CREATE_PLEDGE_GOAL_RE, CREATE_PLEDGE_AMOUNT_RE], fn: parseCreatePledge },
+  { markers: [MARK_COMPLETE_CONFIRM_RE, MARK_COMPLETE_NAME_RE], fn: parseMarkComplete },
+  { markers: [STOP_ROLLOVER_CONFIRM_RE, STOP_ROLLOVER_NAME_RE], fn: parseStopRollover },
+  { markers: [ADD_EXPENSE_CONFIRM_RE, ADD_EXPENSE_AMOUNT_RE, ADD_EXPENSE_CATEGORY_RE], fn: parseAddExpense },
+  { markers: [ADD_PAYEE_CONFIRM_RE, ADD_PAYEE_NAME_RE, ADD_PAYEE_MOBILE_RE, ADD_PAYEE_CATEGORY_RE], fn: parseAddPayee },
+  { markers: [RAISE_TICKET_CONFIRM_RE, RAISE_TICKET_DESC_RE], fn: parseRaiseTicket },
+  { markers: [REOPEN_TICKET_CONFIRM_RE], fn: parseReopenTicket },
+  { markers: [SET_CURRENCY_CONFIRM_RE, SET_CURRENCY_WHICH_RE], fn: parseSetCurrency },
+  { markers: [EDIT_SUBSCRIBER_CONFIRM_RE, EDIT_SUBSCRIBER_WHO_RE, EDIT_SUBSCRIBER_VALUE_RE], fn: parseEditSubscriber },
+  { markers: [PAYEE_CATEGORY_CONFIRM_RE, PAYEE_CATEGORY_WHICH_PAYEE_RE], fn: parsePayeeCategory },
+  { markers: [UPDATE_PROFILE_CONFIRM_RE, UPDATE_PROFILE_WHAT_RE], fn: parseUpdateProfile },
+  { markers: [ADD_STAFF_CONFIRM_RE, ADD_STAFF_NAME_RE, ADD_STAFF_EMAIL_RE, ADD_STAFF_MOBILE_RE], fn: parseAddStaff },
+  { markers: [TOGGLE_STAFF_CONFIRM_RE, TOGGLE_STAFF_WHICH_RE], fn: parseToggleStaff },
+  { markers: [PAYMENT_LINK_CONFIRM_RE, PAYMENT_LINK_WHO_RE], fn: parseCreatePaymentLink },
+  { markers: [WHATSAPP_BULK_CONFIRM_RE, WHATSAPP_BULK_WHICH_RE], fn: parseSendWhatsappReminders }
+];
+
 function parseLocalIntent(message, history) {
   const msg = message.trim();
   const safeHistory = Array.isArray(history) ? history : [];
@@ -946,7 +1303,22 @@ function parseLocalIntent(message, history) {
   const pendingFlowCancelResult = cancelPendingFlowIfAny(msg, safeHistory);
   if (pendingFlowCancelResult) return pendingFlowCancelResult;
 
-  if (/\b(delete|remove|unsubscribe|cancel)\b/i.test(msg)) {
+  // If a specific flow is already mid-progress, give it first refusal on
+  // this message before anything else's fast-path gets a chance to
+  // misfire on it (see FLOW_OWNERS comment above). A null result means
+  // this function itself decided the reply doesn't continue its flow
+  // (e.g. not a recognizable yes/no) — normal dispatch below still runs
+  // in that case.
+  const lastAssistantMsg = [...safeHistory].reverse().find(h => h.role === 'assistant');
+  if (lastAssistantMsg) {
+    const owner = FLOW_OWNERS.find(o => o.markers.some(re => re.test(lastAssistantMsg.content)));
+    if (owner) {
+      const ownerResult = owner.fn(msg, safeHistory);
+      if (ownerResult) return ownerResult;
+    }
+  }
+
+  if (/\b(delete|remove|unsubscribe|cancel)\b/i.test(msg) && !(/\bpayee\b/i.test(msg) && /\bcategor/i.test(msg))) {
     return handleDeleteIntent(msg);
   }
 
@@ -982,6 +1354,24 @@ function parseLocalIntent(message, history) {
 
   const editSubscriberResult = parseEditSubscriber(msg, safeHistory);
   if (editSubscriberResult) return editSubscriberResult;
+
+  const payeeCategoryResult = parsePayeeCategory(msg, safeHistory);
+  if (payeeCategoryResult) return payeeCategoryResult;
+
+  const updateProfileResult = parseUpdateProfile(msg, safeHistory);
+  if (updateProfileResult) return updateProfileResult;
+
+  const toggleStaffResult = parseToggleStaff(msg, safeHistory);
+  if (toggleStaffResult) return toggleStaffResult;
+
+  const addStaffResult = parseAddStaff(msg, safeHistory);
+  if (addStaffResult) return addStaffResult;
+
+  const createPaymentLinkResult = parseCreatePaymentLink(msg, safeHistory);
+  if (createPaymentLinkResult) return createPaymentLinkResult;
+
+  const whatsappRemindersResult = parseSendWhatsappReminders(msg, safeHistory);
+  if (whatsappRemindersResult) return whatsappRemindersResult;
 
   const wantsCollect = /\b(collect(?:ed)?|record(?:ed)?|received)\b/i.test(msg) && /\bfrom\b/i.test(msg);
   if (wantsCollect) {
