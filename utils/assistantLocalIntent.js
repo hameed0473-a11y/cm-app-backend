@@ -70,11 +70,6 @@ function extractNameMobile(msg, keyword) {
   return { name, mobile };
 }
 
-function extractGoalMention(msg) {
-  const m = msg.match(/\b(?:to|for|in)\s+(?:the\s+)?(?:goal\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?(?:\s+goal)?[.?!]*$/i);
-  return m ? m[1].trim() : '';
-}
-
 // A subscriber's per-goal amount is the recurring due THEY are on the hook
 // for each period, not the goal's own (often unset) overall target — so
 // every place that subscribes someone to a goal must get this explicitly
@@ -123,26 +118,39 @@ function matchCurrency(text) {
 const AFFIRMATIVE_RE = /^\s*(yes|yeah|yep|yup|correct|right|sure|ok(?:ay)?|confirm|go ahead|please do)\b/i;
 const CANCEL_RE = /^\s*(no|nope|nah|never ?mind|don'?t|cancel|stop|back|exit|forget it)\b/i;
 
-// The three questions this flow asks, in order — recognized on the
-// assistant's own prior message so a short follow-up reply ("yes", a bare
-// goal name, or "monthly") can be understood without repeating the whole
-// request, same pattern as every other multi-turn flow in this file.
+// The three questions the create-goal flow asks, in order — recognized on
+// the assistant's own prior message so a short follow-up reply ("yes", a
+// bare goal name, or "monthly") can be understood without repeating the
+// whole request, same pattern as every other multi-turn flow in this file.
 const CREATE_GOAL_CONFIRM_RE = /are you saying you'd like to create a new goal/i;
 const CREATE_GOAL_NAME_RE = /^great — what should the goal be named\?$/i;
 const CREATE_GOAL_TYPE_RE = /what type of goal is "([^"]+)"/i;
-const CREATE_GOAL_ANY_STEP_RE = new RegExp(
-  [CREATE_GOAL_CONFIRM_RE.source, CREATE_GOAL_NAME_RE.source, CREATE_GOAL_TYPE_RE.source].join('|'), 'i'
-);
 
-// Lets the user back out of the create-goal flow at any of its 3 steps —
-// called from the very top of parseLocalIntent, before the delete/remove
-// intent check would otherwise misread "cancel" as wanting to delete
-// something.
-function cancelCreateGoalIfPending(msg, history) {
+// Registry of every question regex belonging to a confirm-first multi-turn
+// flow — each flow pushes its own step markers onto this array right after
+// defining them. Used by cancelPendingFlowIfAny() below to let the user
+// back out with "cancel"/"stop"/etc. at ANY step of ANY such flow, checked
+// from the very top of parseLocalIntent before the delete/remove intent
+// check would otherwise misread "cancel" as wanting to delete something.
+const PENDING_FLOW_MARKERS = [CREATE_GOAL_CONFIRM_RE, CREATE_GOAL_NAME_RE, CREATE_GOAL_TYPE_RE];
+
+// Separate, smaller registry for steps where a bare "no" is a normal answer
+// to that specific question (not an abort) — e.g. "no goal, just add them"
+// — so only stricter, unambiguous cancel wording backs out of those steps.
+// Flows push their own such markers on right after defining them.
+const STRICT_ABORT_RE = /^\s*(cancel|stop|never ?mind|forget it|exit|back)\b/i;
+const PENDING_FLOW_STRICT_ABORT_MARKERS = [];
+
+function cancelPendingFlowIfAny(msg, history) {
   const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
-  if (!lastAssistant || !CREATE_GOAL_ANY_STEP_RE.test(lastAssistant.content)) return null;
-  if (!CANCEL_RE.test(msg)) return null;
-  return { reply: 'No problem — cancelled. Let me know if there\'s something else I can help with.', handled: true };
+  if (!lastAssistant) return null;
+  if (PENDING_FLOW_MARKERS.some(re => re.test(lastAssistant.content)) && CANCEL_RE.test(msg)) {
+    return { reply: 'No problem — cancelled. Let me know if there\'s something else I can help with.', handled: true };
+  }
+  if (PENDING_FLOW_STRICT_ABORT_MARKERS.some(re => re.test(lastAssistant.content)) && STRICT_ABORT_RE.test(msg)) {
+    return { reply: 'No problem — cancelled. Let me know if there\'s something else I can help with.', handled: true };
+  }
+  return null;
 }
 
 // A "how do I ..." / "how to ..." question about creating a goal is asking
@@ -161,8 +169,9 @@ function parseCreateGoal(msg, history) {
   const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
 
   // Step 4: answering "what type of goal is X — monthly, yearly, or pledge?"
+  // (a "cancel"/"stop"/etc. reply here is already handled earlier, by
+  // cancelPendingFlowIfAny in parseLocalIntent, before this is even reached)
   if (lastAssistant && CREATE_GOAL_TYPE_RE.test(lastAssistant.content)) {
-    if (CANCEL_RE.test(msg)) return { reply: 'No problem — cancelled. Let me know if there\'s something else I can help with.', handled: true };
     const name = lastAssistant.content.match(CREATE_GOAL_TYPE_RE)[1];
     const category = extractCategory(msg);
     if (!category) {
@@ -182,7 +191,6 @@ function parseCreateGoal(msg, history) {
   // rather than kept as part of it (this flow only asks for name + type,
   // so a target amount mentioned here is simply not captured).
   if (lastAssistant && CREATE_GOAL_NAME_RE.test(lastAssistant.content)) {
-    if (CANCEL_RE.test(msg)) return { reply: 'No problem — cancelled. Let me know if there\'s something else I can help with.', handled: true };
     let name = msg.replace(/^(?:it'?s|its|name it|call it|named?)\s+/i, '').replace(/[.?!]+$/, '').trim();
     name = name.replace(/\s+(?:target|amount|for)\s*(?:of)?\s*(?:rs\.?|inr|₹|\$|£|€)?\s*\d+(?:\.\d+)?\s*$/i, '').trim();
     if (!name) return { reply: 'What should the goal be named?', handled: true };
@@ -199,11 +207,10 @@ function parseCreateGoal(msg, history) {
   }
 
   // Step 2: answering "are you saying you'd like to create a new goal?"
+  // ("cancel" is handled earlier by cancelPendingFlowIfAny; anything else
+  // that isn't a recognizable "yes" just falls through to other intents)
   if (lastAssistant && CREATE_GOAL_CONFIRM_RE.test(lastAssistant.content)) {
-    if (CANCEL_RE.test(msg)) {
-      return { reply: 'No problem — let me know if there\'s something else I can help with.', handled: true };
-    }
-    if (!AFFIRMATIVE_RE.test(msg)) return null; // not a recognizable yes/no — let other intents try this message
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
     return { reply: 'Great — what should the goal be named?', handled: true };
   }
 
@@ -219,82 +226,96 @@ function parseCreateGoal(msg, history) {
   return null;
 }
 
-const ADD_SUBSCRIBER_CLARIFY_RE = /general subscriber only, or also subscribe them to a specific goal/i;
-const ADD_SUBSCRIBER_AMOUNT_CLARIFY_RE = /how much should .+ pay per period for/i;
+// The steps this flow asks, in order. Each question embeds whatever it
+// already knows (name, then also mobile, then also goal) directly in its
+// own text — recovered from there rather than re-scanning history, same
+// approach as create_goal's CREATE_GOAL_TYPE_RE.
+const ADD_SUBSCRIBER_CONFIRM_RE = /are you saying you'd like to add a new subscriber/i;
+const ADD_SUBSCRIBER_NAME_RE = /^great — what's the subscriber's name\?$/i;
+const ADD_SUBSCRIBER_MOBILE_RE = /^what's (.+?)'s mobile number\?$/i;
+const ADD_SUBSCRIBER_GOAL_OR_NOT_RE = /should i add (.+?) \(mobile (\d+)\) as a general subscriber only, or also subscribe them to a specific goal/i;
+const ADD_SUBSCRIBER_AMOUNT_RE = /how much should (.+?) \(mobile (\d+)\) pay per period for "([^"]+)"/i;
+// "no"/"no thanks"/etc. at the goal-or-not step means "no goal, just add
+// them" — a normal answer to that specific question, not an abort — so
+// that step goes in PENDING_FLOW_STRICT_ABORT_MARKERS (only unambiguous
+// wording like "cancel"/"stop" backs out of it) rather than
+// PENDING_FLOW_MARKERS (which would treat a bare "no" as an abort).
+const ADD_SUBSCRIBER_SKIP_GOAL_RE = /^\s*(just add|no goal|no thanks?|general only|none|no)\s*[.?!]*$/i;
 
-// Handles both "add a subscriber named X, mobile Y [to Goal]" in one shot,
-// and the two-turn version where we asked "just add, or also subscribe to a
-// goal?" and this message is the answer — recovered by re-reading the prior
-// user turn (which had the name/mobile) out of the conversation history.
+function goalOrNotQuestion(name, mobile) {
+  return `Got it — should I add ${name} (mobile ${mobile}) as a general subscriber only, or also subscribe them to a specific goal right away? Reply "just add" or say the goal name and their per-period amount, e.g. "Diwali Fund at 500".`;
+}
+
+PENDING_FLOW_MARKERS.push(ADD_SUBSCRIBER_CONFIRM_RE, ADD_SUBSCRIBER_NAME_RE, ADD_SUBSCRIBER_MOBILE_RE, ADD_SUBSCRIBER_AMOUNT_RE);
+PENDING_FLOW_STRICT_ABORT_MARKERS.push(ADD_SUBSCRIBER_GOAL_OR_NOT_RE);
+
+// Keyword-driven, confirm-first flow, same pattern as parseCreateGoal:
+// "add"/"create"/"register" + "subscriber"/"contributor" only starts with
+// a yes/no check, then collects name -> mobile -> (optional goal + amount)
+// one question at a time.
 function parseAddSubscriber(msg, history) {
-  const wantsAdd = /\b(add|create|register)\b/i.test(msg) && /\b(subscriber|contributor)\b/i.test(msg);
-  if (wantsAdd) {
-    const { rest, amount } = stripTrailingAmount(msg);
-    const { name, mobile } = extractNameMobile(rest, '(?:subscriber|contributor)');
-    if (!name) return { reply: 'What\'s the subscriber\'s name? Try: "add a subscriber named Priya, mobile 9876543210".', handled: true };
-    if (!mobile) return { reply: `What's ${name}'s mobile number?`, handled: true };
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
 
-    const goalName = extractGoalMention(rest);
-    if (goalName) {
-      if (!amount) {
-        return { reply: `How much should ${name} pay per period for "${goalName}"? Try: "add a subscriber named ${name}, mobile ${mobile}, to ${goalName} at 500".`, handled: true };
-      }
-      return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName, amount } }, handled: true };
-    }
-    return {
-      reply: `Got it — should I add ${name} as a general subscriber only, or also subscribe them to a specific goal right away? Reply "just add" or say the goal name and their per-period amount, e.g. "Diwali Fund at 500".`,
-      handled: true
-    };
-  }
-
-  // Is the most recent assistant turn one of ours — either the original
-  // "just add or a goal?" question, or our own "how much should they pay?"
-  // follow-up (asked when a goal was named without an amount)?
-  const lastAssistant = [...history].reverse().find(h => h.role === 'assistant');
-  if (!lastAssistant) return null;
-  const isAmountFollowUp = ADD_SUBSCRIBER_AMOUNT_CLARIFY_RE.test(lastAssistant.content);
-  const isOriginalClarify = ADD_SUBSCRIBER_CLARIFY_RE.test(lastAssistant.content);
-  if (!isAmountFollowUp && !isOriginalClarify) return null;
-
-  // Recover the original name/mobile from the most recent user turn that
-  // actually contains them, scanning back as far as needed — this stays
-  // correct however many clarifying round-trips (goal? / amount?) happened
-  // since the original request.
-  let name = '', mobile = '';
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role !== 'user') continue;
-    const found = extractNameMobile(history[i].content, '(?:subscriber|contributor)');
-    if (found.name && found.mobile) { name = found.name; mobile = found.mobile; break; }
-  }
-  if (!name || !mobile) return null;
-
-  // We already know the goal name (it's in our own last question) and are
-  // only waiting on the amount — this message is expected to be just that,
-  // not a fresh goal name.
-  if (isAmountFollowUp) {
-    const goalMatch = lastAssistant.content.match(/for "([^"]+)"/);
-    const goalName = goalMatch ? goalMatch[1] : '';
-    if (!goalName) return null;
+  // Step 6: answering "how much should X (mobile Y) pay per period for <goal>?"
+  if (lastAssistant && ADD_SUBSCRIBER_AMOUNT_RE.test(lastAssistant.content)) {
+    const [, name, mobile, goalName] = lastAssistant.content.match(ADD_SUBSCRIBER_AMOUNT_RE);
     const amount = extractBareOrAtAmount(msg);
     if (!amount) {
-      return { reply: `How much should ${name} pay per period for "${goalName}"? Reply e.g. "500".`, handled: true };
+      return { reply: `How much should ${name} (mobile ${mobile}) pay per period for "${goalName}"? Reply e.g. "500".`, handled: true };
     }
     return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName, amount } }, handled: true };
   }
 
-  if (/^\s*(just add|no goal|no thanks?|general only|none|no)\s*[.?!]*$/i.test(msg)) {
-    return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile } }, handled: true };
+  // Step 5: answering "just add, or also subscribe them to a goal?"
+  // ("cancel"/"stop"/etc. here is already handled by cancelPendingFlowIfAny
+  // in parseLocalIntent, before this is even reached)
+  if (lastAssistant && ADD_SUBSCRIBER_GOAL_OR_NOT_RE.test(lastAssistant.content)) {
+    const [, name, mobile] = lastAssistant.content.match(ADD_SUBSCRIBER_GOAL_OR_NOT_RE);
+    if (ADD_SUBSCRIBER_SKIP_GOAL_RE.test(msg)) {
+      return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile } }, handled: true };
+    }
+    const { rest, amount } = stripTrailingAmount(msg);
+    const goalName = rest.trim();
+    if (!goalName) return { reply: goalOrNotQuestion(name, mobile), handled: true };
+    if (!amount) {
+      return { reply: `How much should ${name} (mobile ${mobile}) pay per period for "${goalName}"? Reply e.g. "${goalName} at 500".`, handled: true };
+    }
+    return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName, amount } }, handled: true };
   }
 
-  const { rest, amount } = stripTrailingAmount(msg);
-  const goalName = rest.trim();
-  if (!goalName) {
-    return { reply: `Got it — should I add ${name} as a general subscriber only, or also subscribe them to a specific goal? Reply "just add" or say the goal name and amount, e.g. "Diwali Fund at 500".`, handled: true };
+  // Step 4: answering "what's X's mobile number?"
+  if (lastAssistant && ADD_SUBSCRIBER_MOBILE_RE.test(lastAssistant.content)) {
+    const name = lastAssistant.content.match(ADD_SUBSCRIBER_MOBILE_RE)[1];
+    const mobileMatch = msg.match(/\b(\d{6,15})\b/);
+    if (!mobileMatch) return { reply: `What's ${name}'s mobile number?`, handled: true };
+    return { reply: goalOrNotQuestion(name, mobileMatch[1]), handled: true };
   }
-  if (!amount) {
-    return { reply: `How much should ${name} pay per period for "${goalName}"? Reply e.g. "${goalName} at 500".`, handled: true };
+
+  // Step 3: answering "what should the subscriber's name be?" — also
+  // accepts the mobile number in the same reply (e.g. "Priya, 9876543210").
+  if (lastAssistant && ADD_SUBSCRIBER_NAME_RE.test(lastAssistant.content)) {
+    const mobileMatch = msg.match(/\b(\d{6,15})\b/);
+    let name = msg.replace(/^(?:it'?s|its|name is|call(?:ed)?)\s+/i, '').replace(/[.?!]+$/, '').trim();
+    if (mobileMatch) name = name.replace(mobileMatch[0], '').replace(/[,\s]+$/, '').trim();
+    if (!name) return { reply: 'What\'s the subscriber\'s name?', handled: true };
+    if (mobileMatch) return { reply: goalOrNotQuestion(name, mobileMatch[1]), handled: true };
+    return { reply: `What's ${name}'s mobile number?`, handled: true };
   }
-  return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName, amount } }, handled: true };
+
+  // Step 2: answering "are you saying you'd like to add a new subscriber?"
+  if (lastAssistant && ADD_SUBSCRIBER_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — what\'s the subscriber\'s name?', handled: true };
+  }
+
+  // Step 1: first mention — a keyword hit only, nothing is assumed yet.
+  const wantsAdd = !HOW_TO_RE.test(msg)
+    && /\b(add|create|register)\b/i.test(msg) && /\b(subscriber|contributor)\b/i.test(msg);
+  if (wantsAdd) {
+    return { reply: 'Are you saying you\'d like to add a new subscriber?', handled: true };
+  }
+
+  return null;
 }
 
 const SUBSCRIBE_RE = /\bsubscribe\b\s+([a-z0-9 .'-]+?)\s+\bto\b\s+(?:the\s+)?(?:goal\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?(?:\s+goal)?[.?!]*$/i;
@@ -600,6 +621,10 @@ const FAQ = [
     reply: 'Sidebar -> "Goals and Pledges" -> "New Goal" (monthly/yearly) or "New Pledge Goal" (one-off) -> enter a name and optional target -> Create. Or just say "create a goal named ..." and I\'ll do it for you.'
   },
   {
+    test: /subscriber|contributor/i,
+    reply: 'Sidebar -> Subscribers -> "+ Add" -> enter a name and mobile number -> Save. Or just say "add a subscriber" and I\'ll walk you through it.'
+  },
+  {
     test: /payment|due|pending/i,
     reply: 'Open the relevant goal or subscriber (or the Pending tab) -> "Collect Payment" -> enter the amount -> Save. Or just say "collect 500 from <name> for <goal>" and I\'ll do it for you.'
   }
@@ -612,10 +637,10 @@ function parseLocalIntent(message, history) {
   const safeHistory = Array.isArray(history) ? history : [];
 
   // Checked before the delete/remove intent check below, since "cancel" is
-  // a legitimate way to back out of the create-goal flow but would
+  // a legitimate way to back out of a pending multi-turn flow but would
   // otherwise be misread as wanting to delete something.
-  const createGoalCancelResult = cancelCreateGoalIfPending(msg, safeHistory);
-  if (createGoalCancelResult) return createGoalCancelResult;
+  const pendingFlowCancelResult = cancelPendingFlowIfAny(msg, safeHistory);
+  if (pendingFlowCancelResult) return pendingFlowCancelResult;
 
   if (/\b(delete|remove|unsubscribe|cancel)\b/i.test(msg)) {
     return handleDeleteIntent(msg);
