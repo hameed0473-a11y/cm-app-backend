@@ -1262,6 +1262,68 @@ const FAQ = [
 const FALLBACK_REPLY = 'Test mode (no AI key set yet): I can currently handle creating goals, collecting payments, adding/editing subscribers, subscribing someone to a goal, creating a pledge, marking a goal complete, stopping a goal\'s rollover, adding an expense/payee, raising or reopening a support ticket, changing your currency, and answering questions like "how much have I collected", "who\'s pending", "what does X owe", "list my active goals", "how many subscribers do I have", and "when does my subscription renew" — plus basic how-to questions. Add ANTHROPIC_API_KEY on the backend to unlock full understanding.';
 
 // ---------------------------------------------------------------
+// GOAL FALLBACK MENU — pilot for a "don't guess, offer a menu" last-resort
+// step, tried only after every specific goal-related flow above has
+// already had its shot at the message and come up empty. A message that
+// mentions "goal" but doesn't cleanly match create/subscribe/pledge/
+// complete/rollover is far more likely to be one of a few common intents
+// than genuinely novel — so this asks which one, instead of either
+// guessing (the old behavior: the FAQ's /goal/i entry below would answer
+// "how to create a goal" for literally anything mentioning "goal") or
+// spending a Claude call on it. A plain "how do I ...?" question still
+// skips this and goes straight to the FAQ's explanation, same as before.
+//
+// Option 5 ("something else") is the only path that still reaches Claude
+// — and it must send Claude the user's ORIGINAL question, not their menu
+// reply ("5" or "not covered" means nothing to Claude on its own). That's
+// carried via the escalateMessage field on the returned result, recovered
+// from the history turn immediately before this menu was asked.
+// ---------------------------------------------------------------
+const GOAL_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a goal. Please choose one:\n1. Create a goal\n2. Delete a goal\n3. Add/remove subscribers on a goal\n4. How to add a goal (steps)\n5. Something else — I\'ll pass this to the AI';
+const GOAL_MENU_RE = /^i'm not quite sure what you'd like to do with a goal\. please choose one:/i;
+PENDING_FLOW_MARKERS.push(GOAL_MENU_RE);
+
+const GOAL_MENU_SUBSCRIBER_STEPS_REPLY = 'I can\'t add or remove subscribers on a goal through this menu — please say "add a subscriber" or "subscribe <name> to <goal>" directly, or use Sidebar -> Subscribers / open the goal itself.';
+const GOAL_MENU_HOWTO_REPLY = 'Sidebar -> "Goals and Pledges" -> "New Goal" (monthly/yearly) or "New Pledge Goal" (one-off) -> enter a name and optional target -> Create. Or just say "create a goal named ..." and I\'ll do it for you.';
+
+function parseGoalFallbackMenu(msg, history) {
+  const safeHistory = Array.isArray(history) ? history : [];
+  const lastAssistant = [...safeHistory].reverse().find(h => h.role === 'assistant');
+
+  if (lastAssistant && GOAL_MENU_RE.test(lastAssistant.content)) {
+    const choice = msg.trim().toLowerCase();
+
+    if (/^1\b/.test(choice) || (/\bcreate\b/i.test(choice) && !/\bdelete\b/i.test(choice))) {
+      return { reply: 'Great — what should the goal be named?', handled: true };
+    }
+    if (/^2\b/.test(choice) || /\bdelete\b/i.test(choice)) {
+      return handleDeleteIntent('delete goal');
+    }
+    if (/^3\b/.test(choice) || /\b(subscriber|subscribe|unsubscribe)\b/i.test(choice)) {
+      return { reply: GOAL_MENU_SUBSCRIBER_STEPS_REPLY, handled: true };
+    }
+    if (/^4\b/.test(choice) || /\bhow\b/i.test(choice)) {
+      return { reply: GOAL_MENU_HOWTO_REPLY, handled: true };
+    }
+    if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
+      const menuIndex = safeHistory.indexOf(lastAssistant);
+      const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
+      const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
+      return { reply: '', handled: false, escalateMessage };
+    }
+
+    // Unrecognized reply to the menu — re-ask rather than guess.
+    return { reply: GOAL_MENU_QUESTION, handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bgoal\b/i.test(msg)) {
+    return { reply: GOAL_MENU_QUESTION, handled: true };
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------
 // FLOW OWNERSHIP — every confirm-first flow's fast-path check runs
 // unconditionally at the top of its own function, which is fine on a
 // fresh message but dangerous mid-flow: a reply meant as step 2 of one
@@ -1290,7 +1352,8 @@ const FLOW_OWNERS = [
   { markers: [ADD_STAFF_CONFIRM_RE, ADD_STAFF_NAME_RE, ADD_STAFF_EMAIL_RE, ADD_STAFF_MOBILE_RE], fn: parseAddStaff },
   { markers: [TOGGLE_STAFF_CONFIRM_RE, TOGGLE_STAFF_WHICH_RE], fn: parseToggleStaff },
   { markers: [PAYMENT_LINK_CONFIRM_RE, PAYMENT_LINK_WHO_RE], fn: parseCreatePaymentLink },
-  { markers: [WHATSAPP_BULK_CONFIRM_RE, WHATSAPP_BULK_WHICH_RE], fn: parseSendWhatsappReminders }
+  { markers: [WHATSAPP_BULK_CONFIRM_RE, WHATSAPP_BULK_WHICH_RE], fn: parseSendWhatsappReminders },
+  { markers: [GOAL_MENU_RE], fn: parseGoalFallbackMenu }
 ];
 
 function parseLocalIntent(message, history) {
@@ -1392,6 +1455,12 @@ function parseLocalIntent(message, history) {
 
   const reportResult = parseReportQuery(msg);
   if (reportResult) return reportResult;
+
+  // Last-resort "goal" pilot — tried only once every specific goal-related
+  // flow above has already had (and passed on) this message. See the
+  // comment above parseGoalFallbackMenu for why this runs before the FAQ.
+  const goalMenuResult = parseGoalFallbackMenu(msg, safeHistory);
+  if (goalMenuResult) return goalMenuResult;
 
   const faqHit = FAQ.find(item => item.test.test(msg));
   if (faqHit) return { reply: faqHit.reply, handled: true };

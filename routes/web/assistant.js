@@ -436,17 +436,24 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
     return res.json(responseBody);
   }
 
+  // Normally the current message itself, but the goal-fallback menu's
+  // "something else" option overrides this to the ORIGINAL question that
+  // triggered the menu — Claude needs that, not the user's bare menu pick
+  // ("5"), which means nothing without the question it was answering.
+  const escalationText = (typeof local.escalateMessage === 'string' && local.escalateMessage.trim())
+    ? local.escalateMessage.trim() : message.trim();
+
   if (!process.env.ANTHROPIC_API_KEY) {
     // Logged whether or not a key is configured — a message the local
     // parser doesn't recognize is a candidate for a new predefined task
     // either way, not just when it actually reaches Claude. No reply/action
     // to record here since Claude was never called.
-    logEscalation(req.proUserId, message.trim(), false);
+    logEscalation(req.proUserId, escalationText, false);
     return res.json({ success: true, reply: local.reply });
   }
 
   // Local parser wasn't confident this is a known pattern — escalate to Claude.
-  const messages = [...priorTurns, { role: 'user', content: message.trim() }];
+  const messages = [...priorTurns, { role: 'user', content: escalationText }];
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -476,7 +483,7 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
 
     if (!response.ok) {
       console.error('Assistant API error:', data?.error || data);
-      logEscalation(req.proUserId, message.trim(), true);
+      logEscalation(req.proUserId, escalationText, true);
       return res.status(502).json({ error: 'The assistant is temporarily unavailable. Please try again.' });
     }
 
@@ -504,14 +511,14 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
     }
 
     logEscalation(
-      req.proUserId, message.trim(), true,
+      req.proUserId, escalationText, true,
       responseBody.reply, toolUse?.name, toolUse?.input
     );
 
     res.json(responseBody);
   } catch (err) {
     console.error('Assistant request failed:', err.message);
-    logEscalation(req.proUserId, message.trim(), true);
+    logEscalation(req.proUserId, escalationText, true);
     res.status(502).json({ error: 'The assistant is temporarily unavailable. Please try again.' });
   }
 });
