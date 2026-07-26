@@ -11,6 +11,13 @@ const router = express.Router();
 const ANTHROPIC_MODEL = process.env.ASSISTANT_MODEL || 'claude-haiku-4-5-20251001';
 const MAX_HISTORY_TURNS = 10;
 const MAX_MESSAGE_LEN = 2000;
+// TEMPORARY cost-testing toggle — set ASSISTANT_DISABLE_TOOLS=true to drop
+// the tools field from the Claude request entirely, so a message that
+// escalates gets a plain-text answer with no tool schemas in the input
+// tokens. Everything else (the local parser, prompt caching on the system
+// prompt) is unaffected. Remove this and its one call site once the token
+// usage comparison is done — it's not meant to be a permanent setting.
+const ASSISTANT_DISABLE_TOOLS = process.env.ASSISTANT_DISABLE_TOOLS === 'true';
 
 // ---------------------------------------------------------------
 // AI DASHBOARD ASSISTANT — HYBRID ROUTING. Every message is tried
@@ -500,7 +507,7 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
         // through the dashboard, not rapid-fire messages — the 5-minute
         // window mostly expired before a second question ever landed.
         system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral', ttl: '1h' } }],
-        tools: TOOLS,
+        ...(ASSISTANT_DISABLE_TOOLS ? {} : { tools: TOOLS }),
         messages
       })
     });
