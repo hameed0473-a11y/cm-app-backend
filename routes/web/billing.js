@@ -35,7 +35,7 @@ const router = express.Router();
 //
 // No session token exists at this point (that's the whole reason
 // they're here), so identity is re-confirmed with mobile+password —
-// same check /web-login itself does against `users`, not `pro_users`.
+// same check /web-login itself does, directly against `pro_users`.
 // ---------------------------------------------------------------
 router.post('/web-request-renewal', rateLimit(10, 15 * 60000), async (req, res) => {
   const { mobile, password, requestedCount, planType } = req.body;
@@ -52,31 +52,23 @@ router.post('/web-request-renewal', rateLimit(10, 15 * 60000), async (req, res) 
   }
 
   try {
-    const { data: userRow, error: userError } = await supabase
-      .from('users')
-      .select('password')
+    const { data: proUser, error: proError } = await supabase
+      .from('pro_users')
+      .select('id, currency, password')
       .eq('mobile', mobile)
       .single();
 
-    if (userError || !userRow || !userRow.password) {
+    if (proError || !proUser || !proUser.password) {
       return res.status(404).json({ error: 'No account found with this mobile number.' });
     }
 
     let isMatch = false;
-    if (userRow.password.startsWith('$2')) {
-      isMatch = await bcrypt.compare(password, userRow.password);
+    if (proUser.password.startsWith('$2')) {
+      isMatch = await bcrypt.compare(password, proUser.password);
     } else {
-      isMatch = userRow.password === password;
+      isMatch = proUser.password === password;
     }
     if (!isMatch) return res.status(401).json({ error: 'Incorrect password. Please try again.' });
-
-    const { data: proUser, error: proError } = await supabase
-      .from('pro_users')
-      .select('id, currency')
-      .eq('mobile', mobile)
-      .single();
-
-    if (proError || !proUser) return res.status(404).json({ error: 'Pro account not found.' });
 
     const { error: updateError } = await supabase
       .from('pro_users')

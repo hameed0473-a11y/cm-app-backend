@@ -3,6 +3,7 @@ require('dotenv').config();
 
 const supabase = require('../../lib/supabase');
 const { requireProToken } = require('../../middleware/auth');
+const { nextId } = require('../../utils/idGen');
 
 const router = express.Router();
 
@@ -37,7 +38,8 @@ router.post('/web-raise-ticket', requireProToken, async (req, res) => {
       .single();
 
     const ticket = {
-      id: `TICKET-${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 10)}`,
+      // Prefixed with the owning pro user's own ID (see utils/idGen.js).
+      id: await nextId(supabase, req.proUserId, 'ticket'),
       user_id: req.proUserId,
       name: proUser?.name || null,
       mobile: proUser?.mobile || null,

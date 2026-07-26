@@ -10,9 +10,9 @@ const express = require('express');
 // ---------------------------------------------------------------
 const router = express.Router();
 
-router.use(require('./basicAuth'));      // /register, /login, /verify-password, /admin-login, /users, /profile, /interested
-router.use(require('./mpinDevice'));     // /set-mpin, /verify-mpin, /update-device, /check-device, /save-device-key, /verify-device-key
-router.use(require('./payments'));       // /verify-subscription, /create-subscription, /payment-callback, /webhook/razorpay
+router.use(require('./adminAuth'));      // /admin-login
+router.use(require('./mpinDevice'));     // /check-device, /save-device-key, /verify-device-key
+router.use(require('./payments'));       // /webhook/razorpay, /webhook/stripe
 router.use(require('./pro'));            // /pro/* (register, login, sync, verify, users, lookup-dues, payment links, append-*)
 router.use(require('./emailOtp'));       // /send-email-otp, /verify-email-otp
 router.use(require('./importExport'));   // /import-contributors, /import-goals

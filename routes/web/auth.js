@@ -45,38 +45,30 @@ router.post('/web-login', rateLimit(10, 15 * 60000), async (req, res) => {
   }
 
   try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('id, mobile, username, password')
+    const { data: proUser, error } = await supabase
+      .from('pro_users')
+      .select('id, name, mobile, email, password, device_id, currency, subscription_expires_at')
       .eq('mobile', mobile)
       .single();
 
-    if (error || !data) {
+    if (error || !proUser) {
       return res.status(404).json({ error: 'No account found for this mobile number' });
     }
-    if (!data.password) {
+    if (!proUser.password) {
       return res.status(400).json({ error: 'Password not set for this account' });
     }
 
     let isMatch = false;
-    if (data.password.startsWith('$2')) {
-      isMatch = await bcrypt.compare(password, data.password);
+    if (proUser.password.startsWith('$2')) {
+      isMatch = await bcrypt.compare(password, proUser.password);
     } else {
-      isMatch = data.password === password;
+      isMatch = proUser.password === password;
     }
     if (!isMatch) {
       return res.status(401).json({ error: 'Incorrect mobile number or password' });
     }
 
-    // Confirm active Pro status directly against pro_users — do not trust
-    // users.tier alone, since that mirrored field can go stale.
-    const { data: proUser } = await supabase
-      .from('pro_users')
-      .select('id, email, device_id, currency, subscription_expires_at')
-      .eq('mobile', mobile)
-      .single();
-
-    const isProActive = !!proUser &&
+    const isProActive =
       (!proUser.subscription_expires_at || new Date(proUser.subscription_expires_at) > new Date());
 
     if (!isProActive) {
@@ -125,7 +117,7 @@ router.post('/web-login', rateLimit(10, 15 * 60000), async (req, res) => {
         success: false,
         otpRequired: true,
         stateId: otpRecord.id.toString(),
-        mobile: data.mobile,
+        mobile: proUser.mobile,
         maskedEmail: maskEmail(proUser.email)
       });
     }
@@ -137,7 +129,7 @@ router.post('/web-login', rateLimit(10, 15 * 60000), async (req, res) => {
     }
 
     const token = jwt.sign(
-      { type: 'pro_web', userId: proUser.id, mobile: data.mobile },
+      { type: 'pro_web', userId: proUser.id, mobile: proUser.mobile },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -146,7 +138,7 @@ router.post('/web-login', rateLimit(10, 15 * 60000), async (req, res) => {
       success: true,
       token,
       role: 'owner',
-      user: { name: data.username, mobile: data.mobile }
+      user: { name: proUser.name, mobile: proUser.mobile }
     });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -156,13 +148,12 @@ router.post('/web-login', rateLimit(10, 15 * 60000), async (req, res) => {
 // ---------------------------------------------------------------
 // WEB REGISTER — lets a brand-new user create a Pro account directly
 // from the website login page and land straight in the dashboard.
-//
-// Web login checks the password against `users` but Pro status against
-// `pro_users`, so a working account needs a row in BOTH. This creates
-// both (mirroring how the mobile app ends up), seeds empty cloud data,
-// and returns the same web token /web-login issues — so the new user is
-// logged in immediately. Access is a genuine 30-day free trial (expiry
-// set 30 days out) — after that, web-login blocks and returns the
+// Every registered user is Pro by default — there's no separate
+// basic/lite tier anymore, so this only ever creates a pro_users row
+// (password included) plus its empty cloud data row, and returns the
+// same web token /web-login issues — so the new user is logged in
+// immediately. Access is a genuine 30-day free trial (expiry set 30
+// days out) — after that, web-login blocks and returns the
 // per-subscriber renewal pricing from lib/pricing.js instead of a token.
 // ---------------------------------------------------------------
 router.post('/web-register', rateLimit(5, 30 * 60000), async (req, res) => {
@@ -239,29 +230,7 @@ router.post('/web-register', rateLimit(5, 30 * 60000), async (req, res) => {
       return res.status(500).json({ error: 'Could not create your account. Please try again.' });
     }
 
-    // 2) users — needed because /web-login verifies the password here.
-    //    Best-effort upsert on mobile so a pre-existing basic row is reused.
-    const { data: existingBasic } = await supabase
-      .from('users').select('id').eq('mobile', mobile).single();
-    if (existingBasic) {
-      await supabase.from('users')
-        .update({ password: hashedPassword, email, username: name, tier: 'pro', is_paid: true })
-        .eq('mobile', mobile);
-    } else {
-      const { error: usersError } = await supabase.from('users').insert([{
-        username: name, mobile, email, password: hashedPassword,
-        login_count: 0, registration_date: now, is_paid: true,
-        tier: 'pro', country_code: countryCode, app_id: 'web'
-      }]);
-      if (usersError) {
-        // Roll back the pro_users row so the account isn't half-created.
-        await supabase.from('pro_users').delete().eq('id', newUserId);
-        console.error('web-register users error:', usersError.message);
-        return res.status(500).json({ error: 'Could not create your account. Please try again.' });
-      }
-    }
-
-    // 3) Seed empty cloud data.
+    // 2) Seed empty cloud data.
     const { error: dataError } = await supabase.from('pro_user_data').insert([{
       user_id: newUserId, contributors: [], targets: [], contributions: [], pledges: [], updated_at: now
     }]);
@@ -356,15 +325,9 @@ router.post('/web-login-verify', rateLimit(10, 15 * 60000), async (req, res) => 
   }
 
   try {
-    const { data: userRow } = await supabase
-      .from('users')
-      .select('username')
-      .eq('mobile', mobile)
-      .single();
-
     const { data: proUser, error } = await supabase
       .from('pro_users')
-      .select('id, mobile, email')
+      .select('id, name, mobile, email')
       .eq('mobile', mobile)
       .single();
 
@@ -385,7 +348,7 @@ router.post('/web-login-verify', rateLimit(10, 15 * 60000), async (req, res) => 
       { expiresIn: '7d' }
     );
 
-    res.json({ success: true, token, role: 'owner', user: { name: userRow?.username || '', mobile: proUser.mobile } });
+    res.json({ success: true, token, role: 'owner', user: { name: proUser.name || '', mobile: proUser.mobile } });
   } catch (err) {
     console.error('web-login-verify error:', err?.message || err);
     res.status(500).json({ error: 'Server error. Please try again.' });

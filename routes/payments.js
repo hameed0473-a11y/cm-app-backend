@@ -3,123 +3,11 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 const supabase = require('../lib/supabase');
-const razorpay = require('../lib/razorpay');
 const gateways = require('../lib/gateways');
 const { mirrorContribution, mirrorPledge } = require('../utils/mirrorWrite');
+const { nextId } = require('../utils/idGen');
 
 const router = express.Router();
-
-// ===============================================================
-// SUBSCRIPTION / TIER ENDPOINTS
-// ===============================================================
-
-// VERIFY SUBSCRIPTION (Lite tier check)
-router.get('/verify-subscription', async (req, res) => {
-  const { mobile, device_id } = req.query;
-  if (!mobile) return res.status(400).json({ error: 'mobile is required' });
-
-  try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('tier, subscription_id, subscription_expires_at, device_id')
-      .eq('mobile', mobile)
-      .single();
-
-    if (error || !data) return res.status(404).json({ error: 'User not found' });
-
-    const isLiteActive = data.tier === 'lite' &&
-      data.subscription_expires_at &&
-      new Date(data.subscription_expires_at) > new Date();
-
-    const isProActive = data.tier === 'pro' &&
-      data.subscription_expires_at &&
-      new Date(data.subscription_expires_at) > new Date();
-
-    const deviceMatch = !data.device_id || !device_id || data.device_id === device_id;
-
-    let resolvedTier = 'basic';
-    if (isProActive && deviceMatch) resolvedTier = 'pro';
-    else if (isLiteActive && deviceMatch) resolvedTier = 'lite';
-
-    res.json({
-      success: true,
-      tier: resolvedTier,
-      subscription_expires_at: data.subscription_expires_at
-    });
-  } catch {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// CREATE PAYMENT LINK (Lite ₹240 or Pro ₹2832)
-router.post('/create-subscription', async (req, res) => {
-  const { mobile, amount, description } = req.body;
-  if (!mobile || !amount) return res.status(400).json({ error: 'mobile and amount are required' });
-
-  try {
-    const paymentLink = await razorpay.paymentLink.create({
-      amount,
-      currency: 'INR',
-      accept_partial: false,
-      description: description || 'Contributions Manager Plan',
-      notify: { sms: false, email: false },
-      reminder_enable: false,
-      notes: { mobile, valid_months: '12' },
-      callback_url: 'https://api.aftechs.in/api/auth/payment-callback',
-      callback_method: 'get'
-    });
-
-    res.json({
-      success: true,
-      payment_link_id: paymentLink.id,
-      short_url: paymentLink.short_url
-    });
-  } catch (err) {
-    console.error('Create payment link error:', JSON.stringify(err));
-    res.status(500).json({
-      error: 'Failed to create payment link',
-      detail: err?.error?.description || err?.message || String(err)
-    });
-  }
-});
-
-// PAYMENT CALLBACK (Razorpay redirects here after payment)
-router.get('/payment-callback', async (req, res) => {
-  const { razorpay_payment_id, razorpay_payment_link_id, razorpay_payment_link_status } = req.query;
-
-  if (razorpay_payment_link_status !== 'paid') {
-    return res.redirect('https://contributions.aftechs.in?payment=failed');
-  }
-
-  try {
-    const paymentLink = await razorpay.paymentLink.fetch(razorpay_payment_link_id);
-    const mobile = paymentLink.notes?.mobile;
-    const amount = paymentLink.amount; // in paise
-
-    if (!mobile) return res.redirect('https://contributions.aftechs.in?payment=failed');
-
-    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
-
-    // Determine tier based on amount paid
-    // Lite = 24000 paise (₹240), Pro = 283200 paise (₹2832)
-    const newTier = amount >= 280000 ? 'pro' : 'lite';
-
-    await supabase
-      .from('users')
-      .update({
-        tier: newTier,
-        subscription_id: razorpay_payment_id,
-        subscription_expires_at: expiresAt,
-        is_paid: true
-      })
-      .eq('mobile', mobile);
-
-    res.redirect(`https://contributions.aftechs.in?payment=success&tier=${newTier}`);
-  } catch (err) {
-    console.error('Payment callback error:', err);
-    res.redirect('https://contributions.aftechs.in?payment=failed');
-  }
-});
 
 // RAZORPAY WEBHOOK
 // NOTE: express.raw({ type: 'application/json' }) here is a second,
@@ -181,24 +69,6 @@ router.post('/webhook/razorpay', express.raw({ type: 'application/json' }), asyn
       // the Pro user's cloud data. Fire-and-forget (shared with the Stripe webhook).
       const rupees = Math.round((event.payload?.payment_link?.entity?.amount || 0) / 100);
       recordOnlineContribution(notes, rupees);
-    } else {
-      // EXISTING subscription-upgrade logic — unchanged.
-      const mobile = notes?.mobile;
-      const amount = event.payload?.payment_link?.entity?.amount;
-      const paymentId = event.payload?.payment?.entity?.id;
-      const newTier = amount >= 280000 ? 'pro' : 'lite';
-      const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
-
-      if (mobile) {
-        supabase
-          .from('users')
-          .update({ tier: newTier, subscription_id: paymentId, subscription_expires_at: expiresAt, is_paid: true })
-          .eq('mobile', mobile)
-          .then(({ error }) => {
-            if (error) console.error('Supabase update error:', error);
-            else console.log(`User upgraded to ${newTier}:`, mobile);
-          });
-      }
     }
   }
 
@@ -261,7 +131,8 @@ function recordOnlineContribution(notes, rupees) {
       } else {
         const contributions = userData.contributions || [];
         const newContribution = {
-          id: `REC-${Date.now()}`,
+          // Prefixed with the owning pro user's own ID (see utils/idGen.js).
+          id: await nextId(supabase, proUserId, 'contribution'),
           contributorId,
           targetId,
           amountPaid: rupees,

@@ -2,6 +2,8 @@ const express = require('express');
 const XLSX = require('xlsx');
 
 const supabase = require('../lib/supabase');
+const { mirrorContributor } = require('../utils/mirrorWrite');
+const { nextId } = require('../utils/idGen');
 
 const router = express.Router();
 
@@ -46,76 +48,76 @@ router.post('/import-contributors', async (req, res) => {
       });
     }
 
-    // Build contributor objects
-    const newContributors = [];
-    rows.forEach((row, idx) => {
+    // Build the parsed name/mobile rows first — every user is Pro, so ids
+    // (assigned below via nextId, see utils/idGen.js) always need a real
+    // owning pro_users.id to be prefixed with.
+    const parsedRows = [];
+    rows.forEach(row => {
       const name = String(row[nameKey] || '').trim();
       const mob = mobileKey ? String(row[mobileKey] || '').replace(/\D/g, '') : '';
       if (!name) return;
-      newContributors.push({
-        id: `cont-imp-${Date.now()}-${idx}`,
-        name,
-        mobile: mob,
-        type: 'monthly',
-        createdAt: new Date().toISOString().slice(0, 10)
-      });
+      parsedRows.push({ name, mobile: mob });
     });
 
-    if (newContributors.length === 0) {
+    if (parsedRows.length === 0) {
       return res.status(400).json({ error: 'No valid contributors found in file.' });
     }
 
-    // Find user's Pro data in Supabase and merge
     const { data: proUser } = await supabase
       .from('pro_users')
       .select('id')
       .eq('mobile', mobile)
       .single();
 
-    if (proUser) {
-      // Pro user — merge into pro_user_data
-      const { data: existing } = await supabase
-        .from('pro_user_data')
-        .select('contributors')
-        .eq('user_id', proUser.id)
-        .single();
-
-      const existingContributors = existing?.contributors || [];
-
-      // Deduplicate by mobile or name
-      const merged = [...existingContributors];
-      let added = 0;
-      let skipped = 0;
-
-      newContributors.forEach(nc => {
-        // Only deduplicate by mobile number — names can repeat legitimately
-        const isDuplicate = nc.mobile && merged.some(ec => ec.mobile === nc.mobile);
-        if (isDuplicate) { skipped++; return; }
-        merged.push(nc);
-        added++;
-      });
-
-      await supabase
-        .from('pro_user_data')
-        .update({ contributors: merged, updated_at: new Date().toISOString() })
-        .eq('user_id', proUser.id);
-
-      return res.json({
-        success: true,
-        added,
-        skipped,
-        total: merged.length,
-        message: `${added} contributors imported, ${skipped} duplicates skipped.`
-      });
+    if (!proUser) {
+      return res.status(404).json({ error: 'No Pro account found for this mobile number.' });
     }
 
-    // Basic/Lite user — return the contributors for local storage
+    const { data: existing } = await supabase
+      .from('pro_user_data')
+      .select('contributors')
+      .eq('user_id', proUser.id)
+      .single();
+
+    const existingContributors = existing?.contributors || [];
+    const merged = [...existingContributors];
+    const newlyAdded = [];
+    let added = 0;
+    let skipped = 0;
+
+    for (const row of parsedRows) {
+      // Only deduplicate by mobile number — names can repeat legitimately
+      const isDuplicate = row.mobile && merged.some(ec => ec.mobile === row.mobile);
+      if (isDuplicate) { skipped++; continue; }
+      const nc = {
+        // Prefixed with the owning pro user's own ID (see utils/idGen.js).
+        id: await nextId(supabase, proUser.id, 'contributor'),
+        name: row.name,
+        mobile: row.mobile,
+        type: 'monthly',
+        createdAt: new Date().toISOString().slice(0, 10)
+      };
+      merged.push(nc);
+      newlyAdded.push(nc);
+      added++;
+    }
+
+    await supabase
+      .from('pro_user_data')
+      .update({ contributors: merged, updated_at: new Date().toISOString() })
+      .eq('user_id', proUser.id);
+
+    // Dual-write: mirror each newly imported contributor into the new table too.
+    for (const c of newlyAdded) {
+      await mirrorContributor(supabase, proUser.id, c);
+    }
+
     res.json({
       success: true,
-      contributors: newContributors,
-      added: newContributors.length,
-      skipped: 0,
-      message: `${newContributors.length} contributors ready to import.`
+      added,
+      skipped,
+      total: merged.length,
+      message: `${added} contributors imported, ${skipped} duplicates skipped.`
     });
 
   } catch (err) {

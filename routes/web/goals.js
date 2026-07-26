@@ -7,6 +7,7 @@ const {
   mirrorTarget, mirrorArchiveTarget, mirrorSubscription, mirrorDeleteSubscription
 } = require('../../utils/mirrorWrite');
 const { periodKeyForDate, periodLabel } = require('../../utils/rolloverEngine');
+const { nextId } = require('../../utils/idGen');
 
 const router = express.Router();
 
@@ -58,7 +59,10 @@ router.post('/web-create-target', requireProToken, async (req, res) => {
     }
 
     const newTarget = {
-      id: `target-${category}-${Date.now().toString().slice(-6)}`,
+      // Prefixed with the owning pro user's own ID + a per-category code
+      // (gm/gy/ge/...), so this can never collide with another user's
+      // goal id (see utils/idGen.js).
+      id: await nextId(supabase, req.proUserId, category),
       name: displayName,
       category,
       status: 'active',
@@ -152,7 +156,7 @@ router.post('/web-subscribe-contributors', requireProOrStaffToken, async (req, r
 
     // Dual-write: mirror each new subscription into the new table too.
     for (const s of updatedSubs) {
-      await mirrorSubscription(supabase, s.contributorId, targetId, s.amount, null);
+      await mirrorSubscription(supabase, s.contributorId, targetId, s.amount, null, req.proUserId);
     }
 
     res.json({ success: true, updated: updatedCount });

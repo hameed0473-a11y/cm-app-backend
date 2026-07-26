@@ -5,6 +5,7 @@ const supabase = require('../../lib/supabase');
 const { requireProToken } = require('../../middleware/auth');
 const { encrypt, decrypt } = require('../../utils/cryptoVault');
 const { maskAccountNumber } = require('../../utils/gatewayValidation');
+const { nextId } = require('../../utils/idGen');
 
 const router = express.Router();
 
@@ -43,7 +44,8 @@ router.post('/web-add-expense', requireProToken, async (req, res) => {
 
   try {
     const expense = {
-      id: `EXP-${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 10)}`,
+      // Prefixed with the owning pro user's own ID (see utils/idGen.js).
+      id: await nextId(supabase, req.proUserId, 'expense'),
       user_id: req.proUserId,
       category,
       amount,
@@ -169,7 +171,8 @@ router.post('/web-add-payee', requireProToken, async (req, res) => {
     }
 
     const payee = {
-      id: `PAYEE-${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 10)}`,
+      // Prefixed with the owning pro user's own ID (see utils/idGen.js).
+      id: await nextId(supabase, req.proUserId, 'payee'),
       user_id: req.proUserId,
       name,
       mobile,

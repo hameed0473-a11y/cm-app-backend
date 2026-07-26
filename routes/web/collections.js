@@ -6,6 +6,7 @@ const { requireProToken, requireProOrStaffToken } = require('../../middleware/au
 const { getDefaultBreakup, getRemainingBreakup, breakupTotal } = require('../../utils/arrears');
 const { getMaxReceipts, getReceiptUsage } = require('../../lib/pricing');
 const { mirrorContribution, mirrorPledge, mirrorArchiveTarget, mirrorSubscription } = require('../../utils/mirrorWrite');
+const { nextId } = require('../../utils/idGen');
 
 const router = express.Router();
 
@@ -181,7 +182,8 @@ router.post('/web-collect-payment', requireProOrStaffToken, async (req, res) => 
 
       const contributions = userData.contributions || [];
       const newContribution = {
-        id: `REC-${Date.now()}`,
+        // Prefixed with the owning pro user's own ID (see utils/idGen.js).
+        id: await nextId(supabase, req.proUserId, 'contribution'),
         contributorId,
         targetId,
         amountPaid: Number(amount),

@@ -19,6 +19,7 @@
 
 const supabase = require('../lib/supabase');
 const { mirrorTarget, mirrorArchiveTarget, mirrorSubscription } = require('./mirrorWrite');
+const { nextId } = require('./idGen');
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -92,7 +93,7 @@ function breakupTotal(breakup) {
 // outside its own copies; returns whether a write is needed and the
 // updated arrays plus a list of best-effort mirror-write callbacks to
 // run after the real write succeeds.
-function processUserRow(row, today) {
+async function processUserRow(row, today) {
   let targets = [...(row.targets || [])];
   let contributors = [...(row.contributors || [])];
   const contributions = row.contributions || [];
@@ -144,7 +145,9 @@ function processUserRow(row, today) {
       );
       if (already) { working = already; continue; }
 
-      const newTargetId = `target-${category}-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 1000)}`;
+      // Prefixed with the owning pro user's own ID (see utils/idGen.js) —
+      // can never collide with another user's goal id.
+      const newTargetId = await nextId(supabase, userId, category);
       const newTarget = {
         id: newTargetId,
         name: `${baseName} — ${periodLabel(nextKey, category)}`,
@@ -194,7 +197,7 @@ function processUserRow(row, today) {
         const nextTargetIds = [...(c.targetIds || [])];
         if (!nextTargetIds.includes(newTargetId)) nextTargetIds.push(newTargetId);
 
-        afterWrite.push(() => mirrorSubscription(supabase, c.id, newTargetId, newAmount, newBreakup));
+        afterWrite.push(() => mirrorSubscription(supabase, c.id, newTargetId, newAmount, newBreakup, userId));
 
         return {
           ...c,
@@ -231,7 +234,7 @@ async function runRolloverForAllUsers() {
   for (const row of rows || []) {
     summary.usersChecked++;
     try {
-      const result = processUserRow(row, today);
+      const result = await processUserRow(row, today);
       if (!result.changed) continue;
 
       const { error: updateError } = await supabase

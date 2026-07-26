@@ -4,6 +4,7 @@ require('dotenv').config();
 const supabase = require('../../lib/supabase');
 const { requireProToken, requireProOrStaffToken } = require('../../middleware/auth');
 const { mirrorContributor, mirrorEditContributor, mirrorDeleteContributor } = require('../../utils/mirrorWrite');
+const { nextId } = require('../../utils/idGen');
 
 const router = express.Router();
 
@@ -39,23 +40,19 @@ router.post('/web-add-contributors', requireProOrStaffToken, async (req, res) =>
     const contributors = userData.contributors || [];
     const existingMobiles = new Set(contributors.map(c => c.mobile));
 
-    let nextIdNum = contributors.reduce((m, c) => {
-      const n = parseInt(String(c.id).replace(/\D/g, '')) || 0;
-      return Math.max(m, n);
-    }, 1000);
-
     let addedCount = 0, skippedCount = 0;
     const newlyAdded = [];
-    newOnes.forEach(nc => {
+    for (const nc of newOnes) {
       const mobile = String(nc.mobile || '').trim();
       const name = String(nc.name || '').trim();
       if (!name || !mobile || existingMobiles.has(mobile)) {
         skippedCount++;
-        return;
+        continue;
       }
-      nextIdNum++;
       const newContributor = {
-        id: `CONTR-${nextIdNum}`,
+        // Prefixed with the owning pro user's own ID, so this can never
+        // collide with another user's contributor id (see utils/idGen.js).
+        id: await nextId(supabase, req.proUserId, 'contributor'),
         name,
         mobile,
         address: String(nc.address || '').trim() || undefined,
@@ -66,7 +63,7 @@ router.post('/web-add-contributors', requireProOrStaffToken, async (req, res) =>
       newlyAdded.push(newContributor);
       existingMobiles.add(mobile);
       addedCount++;
-    });
+    }
 
     const { error: updateError } = await supabase
       .from('pro_user_data')

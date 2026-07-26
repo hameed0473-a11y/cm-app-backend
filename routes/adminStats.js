@@ -17,9 +17,11 @@ function isIndianCountryCode(countryCode) {
 // ===============================================================
 // ADMIN — DASHBOARD STATISTICS
 //
-// Card-level aggregates for the admin "Users" view:
+// Card-level aggregates for the admin "Users" view. Every registered
+// user is Pro by default (no separate basic/lite tier anymore), so
+// both cards below now read from pro_users directly:
 //   Card-1: total users, India/foreign split
-//   Card-2: paid users, India/foreign split
+//   Card-2: paid (active-subscription) users, India/foreign split
 //   Card-3: total subscribers platform-wide — sum of
 //           countUniqueSubscribers(contributors, pledges) across EVERY
 //           treasurer's pro_user_data row. Not deduped across accounts:
@@ -31,8 +33,8 @@ function isIndianCountryCode(countryCode) {
 router.get('/admin-stats', requireAdmin, async (req, res) => {
   try {
     const { data: userRows, error: userError } = await supabase
-      .from('users')
-      .select('country_code, is_paid');
+      .from('pro_users')
+      .select('country_code, subscription_expires_at');
 
     if (userError) {
       console.error('admin-stats users error:', userError.message);
@@ -45,7 +47,8 @@ router.get('/admin-stats', requireAdmin, async (req, res) => {
       const indian = isIndianCountryCode(u.country_code);
       usersTotal++;
       if (indian) usersIndian++; else usersForeign++;
-      if (u.is_paid) {
+      const isActive = u.subscription_expires_at && new Date(u.subscription_expires_at) > new Date();
+      if (isActive) {
         paidTotal++;
         if (indian) paidIndian++; else paidForeign++;
       }

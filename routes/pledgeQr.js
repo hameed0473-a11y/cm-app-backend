@@ -4,6 +4,7 @@ const supabase = require('../lib/supabase');
 const gateways = require('../lib/gateways');
 const { rateLimit } = require('../middleware/rateLimit');
 const { mirrorPledge } = require('../utils/mirrorWrite');
+const { nextId } = require('../utils/idGen');
 
 const router = express.Router();
 
@@ -157,7 +158,9 @@ router.post('/pledge-qr-new-pledge', rateLimit(10, 10 * 60000), async (req, res)
     }
 
     const newPledge = {
-      id: `pledge-${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 100)}`,
+      // Prefixed with the owning pro user's own ID (see utils/idGen.js) —
+      // can never collide with another user's pledge id.
+      id: await nextId(supabase, proUserId, 'pledge'),
       targetId, targetName: target.name, name: cleanName, mobile: cleanMobile,
       promisedAmount: cleanAmount, amountPaid: 0, status: 'pending', createdAt: new Date().toISOString()
     };
@@ -256,7 +259,9 @@ router.post('/pledge-qr-anonymous-pay', rateLimit(10, 10 * 60000), async (req, r
     const pledges = userData?.pledges || [];
 
     const newPledge = {
-      id: `pledge-${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 100)}`,
+      // Prefixed with the owning pro user's own ID (see utils/idGen.js) —
+      // can never collide with another user's pledge id.
+      id: await nextId(supabase, proUserId, 'pledge'),
       targetId, targetName: target.name, name: 'Anonymous', mobile: '9999999999',
       promisedAmount: cleanAmount, amountPaid: 0, status: 'pending', createdAt: new Date().toISOString(),
       anonymous: true

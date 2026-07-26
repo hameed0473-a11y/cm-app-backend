@@ -33,6 +33,11 @@ async function mirrorContribution(supabase, userId, contribution) {
   }
 }
 
+// Pledges stay their own entity — one event-category goal can have many
+// pledgers underneath it (unchanged from before). The only fix here is
+// that pledge.id itself is now generated with the owning user's ID
+// baked in (see routes/web/pledges.js / routes/pledgeQr.js), so it's
+// globally unique the same way every other entity now is.
 async function mirrorPledge(supabase, userId, pledge) {
   try {
     const { error } = await supabase.from('pledges').upsert([{
@@ -105,11 +110,12 @@ async function mirrorArchiveTarget(supabase, targetId, status) {
   }
 }
 
-async function mirrorSubscription(supabase, contributorId, targetId, expectedAmount, breakup) {
+async function mirrorSubscription(supabase, contributorId, targetId, expectedAmount, breakup, userId) {
   try {
     const { error } = await supabase.from('contributor_subscriptions').upsert([{
       contributor_id: contributorId,
       target_id: targetId,
+      user_id: userId || null,
       expected_amount: expectedAmount || 0,
       breakup: breakup || null
     }], { onConflict: 'contributor_id,target_id' });
@@ -212,7 +218,7 @@ async function mirrorFullSyncBatch(supabase, userId, { contributors = [], target
       (c.targetIds || []).forEach(targetId => {
         if (!validTargetIds.has(targetId)) return; // dangling reference — skip silently, same as migration script
         subscriptionRows.push({
-          contributor_id: c.id, target_id: targetId,
+          contributor_id: c.id, target_id: targetId, user_id: userId,
           expected_amount: c.targetAmounts?.[targetId] ?? 0,
           breakup: c.targetBreakups?.[targetId] || null
         });

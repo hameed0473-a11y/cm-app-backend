@@ -4,6 +4,7 @@ require('dotenv').config();
 const supabase = require('../../lib/supabase');
 const { requireProOrStaffToken } = require('../../middleware/auth');
 const { mirrorPledge } = require('../../utils/mirrorWrite');
+const { nextId } = require('../../utils/idGen');
 
 const router = express.Router();
 
@@ -40,7 +41,9 @@ router.post('/web-create-pledge', requireProOrStaffToken, async (req, res) => {
     const pledges = userData.pledges || [];
 
     const newPledge = {
-      id: `pledge-${Date.now().toString().slice(-8)}`,
+      // Prefixed with the owning pro user's own ID (see utils/idGen.js) —
+      // can never collide with another user's pledge id.
+      id: await nextId(supabase, req.proUserId, 'pledge'),
       targetId,
       targetName: target.name,
       name: name.trim(),

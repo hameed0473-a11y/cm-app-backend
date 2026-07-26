@@ -441,13 +441,6 @@ router.post('/pro/register', async (req, res) => {
       return res.status(500).json({ error: 'Failed to set up your cloud data. Please try again.' });
     }
 
-    // Also mark user as Pro in the basic users tracking table (for tier verification)
-    await supabase
-      .from('users')
-      .update({ tier: 'pro', is_paid: true })
-      .eq('mobile', mobile)
-      .then(() => {}); // silent — user may not be in basic table
-
     const safeUser = {
       id: newUser.id,
       name: newUser.name,
