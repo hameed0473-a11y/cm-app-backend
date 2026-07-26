@@ -45,14 +45,6 @@ function extractCategory(msg) {
   return null;
 }
 
-function extractGoalName(msg) {
-  let m = msg.match(/(?:named|called)\s+["“]?([^"”]+?)["”]?(?=\s+(?:with\b|target\b|for\b|monthly\b|yearly\b|event\b)|[.?!]*$)/i);
-  if (m) return m[1].trim();
-  m = msg.match(/\bgoal\b\s+["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?(?=\s+(?:with\b|target\b|for\b|monthly\b|yearly\b|event\b)|[.?!]*$)/i);
-  if (m) return m[1].trim();
-  return '';
-}
-
 function parseCollectPayment(msg) {
   // "collect 500 from Ramesh for Diwali Fund"
   let m = msg.match(/(?:collect(?:ed)?|record(?:ed)?|received)\s+(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)\s+from\s+([a-z0-9 .'-]+?)\s+for\s+([a-z0-9 &.'-]+?)[.?!]*$/i);
@@ -118,6 +110,86 @@ function matchCurrency(text) {
   for (const word of Object.keys(CURRENCY_WORDS)) {
     if (norm.includes(word)) return CURRENCY_WORDS[word];
   }
+  return null;
+}
+
+// Loose "does this feel like a yes/no" check — kept generic (not tied to
+// create_goal specifically) so any future confirm-first flow can reuse it.
+// "cancel" is deliberately excluded from NEGATIVE_RE: parseLocalIntent's
+// very first check treats any message containing "cancel" as a
+// delete/remove intent, so including it here would never actually be
+// reached — a bare "no"/"nope"/etc. is enough to decline.
+const AFFIRMATIVE_RE = /^\s*(yes|yeah|yep|yup|correct|right|sure|ok(?:ay)?|confirm|go ahead|please do)\b/i;
+const NEGATIVE_RE = /^\s*(no|nope|nah|never ?mind|don'?t)\b/i;
+
+// The three questions this flow asks, in order — recognized on the
+// assistant's own prior message so a short follow-up reply ("yes", a bare
+// goal name, or "monthly") can be understood without repeating the whole
+// request, same pattern as every other multi-turn flow in this file.
+const CREATE_GOAL_CONFIRM_RE = /are you saying you'd like to create a new goal/i;
+const CREATE_GOAL_NAME_RE = /^great — what should the goal be named\?$/i;
+const CREATE_GOAL_TYPE_RE = /what type of goal is "([^"]+)"/i;
+
+// Keyword-driven, confirm-first flow: a message merely containing
+// "create"/"add"/etc. + "goal"/"target"/"fund"/"pledge" is treated as a
+// probable (not certain) request, so the very first thing we do is ask the
+// user to confirm before assuming anything — cheap to correct if wrong,
+// since nothing is proposed/created until they say yes twice more (goal
+// name, then type) and finally confirm the actual create_goal action card.
+function parseCreateGoal(msg, history) {
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 4: answering "what type of goal is X — monthly, yearly, or pledge?"
+  if (lastAssistant && CREATE_GOAL_TYPE_RE.test(lastAssistant.content)) {
+    const name = lastAssistant.content.match(CREATE_GOAL_TYPE_RE)[1];
+    const category = extractCategory(msg);
+    if (!category) {
+      return { reply: `Sorry, I didn't catch the type — is "${name}" a monthly goal, a yearly goal, or a one-off/event pledge?`, handled: true };
+    }
+    return {
+      reply: 'Here\'s what I understood:',
+      action: { type: 'create_goal', params: { name, category, targetAmount: 0 } },
+      handled: true
+    };
+  }
+
+  // Step 3: answering "what should the goal be named?" — usually just a
+  // name, but also accepts the type in the same reply (e.g. "Water Fund,
+  // monthly"), skipping straight to step 4's result in that case. Any
+  // stray "target/amount/for <number>" clause is stripped out of the name
+  // rather than kept as part of it (this flow only asks for name + type,
+  // so a target amount mentioned here is simply not captured).
+  if (lastAssistant && CREATE_GOAL_NAME_RE.test(lastAssistant.content)) {
+    let name = msg.replace(/^(?:it'?s|its|name it|call it|named?)\s+/i, '').replace(/[.?!]+$/, '').trim();
+    name = name.replace(/\s+(?:target|amount|for)\s*(?:of)?\s*(?:rs\.?|inr|₹|\$|£|€)?\s*\d+(?:\.\d+)?\s*$/i, '').trim();
+    if (!name) return { reply: 'What should the goal be named?', handled: true };
+    const category = extractCategory(name);
+    if (category) {
+      name = name.replace(/\b(monthly|yearly|annual(?:ly)?|event|one[- ]?off|pledge)\b/gi, '').replace(/[,\s]+$/, '').replace(/\s{2,}/g, ' ').trim();
+      return {
+        reply: 'Here\'s what I understood:',
+        action: { type: 'create_goal', params: { name, category, targetAmount: 0 } },
+        handled: true
+      };
+    }
+    return { reply: `What type of goal is "${name}" — monthly, yearly, or a one-off/event pledge?`, handled: true };
+  }
+
+  // Step 2: answering "are you saying you'd like to create a new goal?"
+  if (lastAssistant && CREATE_GOAL_CONFIRM_RE.test(lastAssistant.content)) {
+    if (NEGATIVE_RE.test(msg)) {
+      return { reply: 'No problem — let me know if there\'s something else I can help with.', handled: true };
+    }
+    if (!AFFIRMATIVE_RE.test(msg)) return null; // not a recognizable yes/no — let other intents try this message
+    return { reply: 'Great — what should the goal be named?', handled: true };
+  }
+
+  // Step 1: first mention — a keyword hit only, nothing is assumed yet
+  const wantsCreateGoal = /\b(create|add|start|set ?up|make)\b/i.test(msg) && /\b(goal|target|fund|pledge)\b/i.test(msg);
+  if (wantsCreateGoal) {
+    return { reply: 'Are you saying you\'d like to create a new goal?', handled: true };
+  }
+
   return null;
 }
 
@@ -573,22 +645,8 @@ function parseLocalIntent(message, history) {
     return { reply: 'Here\'s what I understood:', action: { type: 'collect_payment', params: parsed }, handled: true };
   }
 
-  const wantsCreateGoal = /\b(create|add|start|set ?up)\b/i.test(msg) && /\b(goal|target|fund|pledge)\b/i.test(msg);
-  if (wantsCreateGoal) {
-    const name = extractGoalName(msg);
-    if (!name) {
-      return { reply: 'What should the goal be named? Try: "create a goal named Diwali Fund".', handled: true };
-    }
-    const category = extractCategory(msg);
-    if (!category) {
-      return { reply: `What type of goal is "${name}" — monthly, yearly, or a one-off/event pledge?`, handled: true };
-    }
-    return {
-      reply: 'Here\'s what I understood:',
-      action: { type: 'create_goal', params: { name, category, targetAmount: extractAmount(msg) } },
-      handled: true
-    };
-  }
+  const createGoalResult = parseCreateGoal(msg, safeHistory);
+  if (createGoalResult) return createGoalResult;
 
   const reportResult = parseReportQuery(msg);
   if (reportResult) return reportResult;
