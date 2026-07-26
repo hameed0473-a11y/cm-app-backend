@@ -115,12 +115,13 @@ function matchCurrency(text) {
 
 // Loose "does this feel like a yes/no" check — kept generic (not tied to
 // create_goal specifically) so any future confirm-first flow can reuse it.
-// "cancel" is deliberately excluded from NEGATIVE_RE: parseLocalIntent's
-// very first check treats any message containing "cancel" as a
-// delete/remove intent, so including it here would never actually be
-// reached — a bare "no"/"nope"/etc. is enough to decline.
+// CANCEL_RE also catches "cancel"/"stop"/"back"/"exit" as ways to step back
+// out of a pending multi-turn flow at any point, not just when directly
+// answering a yes/no question. It's checked separately, and earlier (from
+// parseLocalIntent, via cancelCreateGoalIfPending below), than the
+// top-level delete/remove intent check would otherwise swallow "cancel".
 const AFFIRMATIVE_RE = /^\s*(yes|yeah|yep|yup|correct|right|sure|ok(?:ay)?|confirm|go ahead|please do)\b/i;
-const NEGATIVE_RE = /^\s*(no|nope|nah|never ?mind|don'?t)\b/i;
+const CANCEL_RE = /^\s*(no|nope|nah|never ?mind|don'?t|cancel|stop|back|exit|forget it)\b/i;
 
 // The three questions this flow asks, in order — recognized on the
 // assistant's own prior message so a short follow-up reply ("yes", a bare
@@ -129,6 +130,26 @@ const NEGATIVE_RE = /^\s*(no|nope|nah|never ?mind|don'?t)\b/i;
 const CREATE_GOAL_CONFIRM_RE = /are you saying you'd like to create a new goal/i;
 const CREATE_GOAL_NAME_RE = /^great — what should the goal be named\?$/i;
 const CREATE_GOAL_TYPE_RE = /what type of goal is "([^"]+)"/i;
+const CREATE_GOAL_ANY_STEP_RE = new RegExp(
+  [CREATE_GOAL_CONFIRM_RE.source, CREATE_GOAL_NAME_RE.source, CREATE_GOAL_TYPE_RE.source].join('|'), 'i'
+);
+
+// Lets the user back out of the create-goal flow at any of its 3 steps —
+// called from the very top of parseLocalIntent, before the delete/remove
+// intent check would otherwise misread "cancel" as wanting to delete
+// something.
+function cancelCreateGoalIfPending(msg, history) {
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+  if (!lastAssistant || !CREATE_GOAL_ANY_STEP_RE.test(lastAssistant.content)) return null;
+  if (!CANCEL_RE.test(msg)) return null;
+  return { reply: 'No problem — cancelled. Let me know if there\'s something else I can help with.', handled: true };
+}
+
+// A "how do I ..." / "how to ..." question about creating a goal is asking
+// for an explanation, not asking us to actually create one — must not
+// trigger the confirm-first flow below (it used to, since it also contains
+// "create" + "goal").
+const HOW_TO_RE = /\bhow\s+(?:do|does|can|to)\b/i;
 
 // Keyword-driven, confirm-first flow: a message merely containing
 // "create"/"add"/etc. + "goal"/"target"/"fund"/"pledge" is treated as a
@@ -141,6 +162,7 @@ function parseCreateGoal(msg, history) {
 
   // Step 4: answering "what type of goal is X — monthly, yearly, or pledge?"
   if (lastAssistant && CREATE_GOAL_TYPE_RE.test(lastAssistant.content)) {
+    if (CANCEL_RE.test(msg)) return { reply: 'No problem — cancelled. Let me know if there\'s something else I can help with.', handled: true };
     const name = lastAssistant.content.match(CREATE_GOAL_TYPE_RE)[1];
     const category = extractCategory(msg);
     if (!category) {
@@ -160,6 +182,7 @@ function parseCreateGoal(msg, history) {
   // rather than kept as part of it (this flow only asks for name + type,
   // so a target amount mentioned here is simply not captured).
   if (lastAssistant && CREATE_GOAL_NAME_RE.test(lastAssistant.content)) {
+    if (CANCEL_RE.test(msg)) return { reply: 'No problem — cancelled. Let me know if there\'s something else I can help with.', handled: true };
     let name = msg.replace(/^(?:it'?s|its|name it|call it|named?)\s+/i, '').replace(/[.?!]+$/, '').trim();
     name = name.replace(/\s+(?:target|amount|for)\s*(?:of)?\s*(?:rs\.?|inr|₹|\$|£|€)?\s*\d+(?:\.\d+)?\s*$/i, '').trim();
     if (!name) return { reply: 'What should the goal be named?', handled: true };
@@ -177,15 +200,18 @@ function parseCreateGoal(msg, history) {
 
   // Step 2: answering "are you saying you'd like to create a new goal?"
   if (lastAssistant && CREATE_GOAL_CONFIRM_RE.test(lastAssistant.content)) {
-    if (NEGATIVE_RE.test(msg)) {
+    if (CANCEL_RE.test(msg)) {
       return { reply: 'No problem — let me know if there\'s something else I can help with.', handled: true };
     }
     if (!AFFIRMATIVE_RE.test(msg)) return null; // not a recognizable yes/no — let other intents try this message
     return { reply: 'Great — what should the goal be named?', handled: true };
   }
 
-  // Step 1: first mention — a keyword hit only, nothing is assumed yet
-  const wantsCreateGoal = /\b(create|add|start|set ?up|make)\b/i.test(msg) && /\b(goal|target|fund|pledge)\b/i.test(msg);
+  // Step 1: first mention — a keyword hit only, nothing is assumed yet.
+  // Skipped for "how do I .../how to ..." questions, which want an
+  // explanation (see the FAQ below), not to actually create anything.
+  const wantsCreateGoal = !HOW_TO_RE.test(msg)
+    && /\b(create|add|start|set ?up|make)\b/i.test(msg) && /\b(goal|target|fund|pledge)\b/i.test(msg);
   if (wantsCreateGoal) {
     return { reply: 'Are you saying you\'d like to create a new goal?', handled: true };
   }
@@ -584,6 +610,12 @@ const FALLBACK_REPLY = 'Test mode (no AI key set yet): I can currently handle cr
 function parseLocalIntent(message, history) {
   const msg = message.trim();
   const safeHistory = Array.isArray(history) ? history : [];
+
+  // Checked before the delete/remove intent check below, since "cancel" is
+  // a legitimate way to back out of the create-goal flow but would
+  // otherwise be misread as wanting to delete something.
+  const createGoalCancelResult = cancelCreateGoalIfPending(msg, safeHistory);
+  if (createGoalCancelResult) return createGoalCancelResult;
 
   if (/\b(delete|remove|unsubscribe|cancel)\b/i.test(msg)) {
     return handleDeleteIntent(msg);
