@@ -1419,6 +1419,115 @@ function parseCollectFallbackMenu(msg, history) {
 }
 
 // ---------------------------------------------------------------
+// SUBSCRIBER FALLBACK MENU — same last-resort pattern as the goal/collect
+// menus above, keyed on "subscriber"/"subscribers". Option 1 hands off
+// into the existing add_subscriber flow (via its own marker text) and
+// option 5's terminal step ("what should X's name/mobile be changed to?")
+// hands off into the existing edit_subscriber flow the same way — see the
+// FLOW_OWNERS comment below for why reusing exact marker text is what
+// makes that handoff work without duplicating either flow's logic.
+//
+// Option 5 also needs to show the subscriber's actual current details
+// before asking what to change, per spec — the local parser has no real
+// account data to show, so it proposes the same view_subscriber_details
+// action as option 2 (this time with a subscriberName so the frontend can
+// pre-fill/auto-search it), bundled with the next chat question in the
+// same turn. See AIAssistant.tsx: this action always executes immediately
+// with no confirmation card, since opening a read-only lookup panel isn't
+// a write and doesn't need one.
+//
+// NOTE: the user's own spec listed 5 numbered options plus an unnumbered
+// "not covered above" line — treated here as a 6th option, since escalating
+// to Claude needs its own slot distinct from "edit subscriber details".
+// ---------------------------------------------------------------
+const SUBSCRIBER_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a subscriber. Please choose one:\n1. Add subscriber\n2. View subscriber details\n3. Delete/remove the subscriber\n4. How to add a subscriber\n5. Edit subscriber details\n6. Something else — I\'ll pass this to the AI';
+const SUBSCRIBER_MENU_RE = /^i'm not quite sure what you'd like to do with a subscriber\. please choose one:/i;
+PENDING_FLOW_MARKERS.push(SUBSCRIBER_MENU_RE);
+
+const SUBSCRIBER_MENU_HOWTO_REPLY = 'Sidebar -> Subscribers -> "+ Add" -> enter a name and mobile number -> Save. Or just say "add a subscriber" and I\'ll walk you through it.';
+
+const EDIT_DETAILS_NAME_MOBILE_RE = /^great — what's the subscriber's name and mobile number, so i can look up their details\?$/i;
+const EDIT_DETAILS_WHAT_RE = /^here are (.+?)'s details — check the panel that just opened\. what would you like to change: name, mobile number, or unsubscribe from a goal\?$/i;
+PENDING_FLOW_MARKERS.push(EDIT_DETAILS_NAME_MOBILE_RE, EDIT_DETAILS_WHAT_RE);
+
+// Owned only by the subscriber menu's option 5 — no standalone keyword
+// trigger of its own, same reasoning as parseDownloadReceipt above.
+function parseEditSubscriberDetailsLookup(msg, history) {
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 3: answering "what would you like to change?"
+  if (lastAssistant && EDIT_DETAILS_WHAT_RE.test(lastAssistant.content)) {
+    const [, subscriberName] = lastAssistant.content.match(EDIT_DETAILS_WHAT_RE);
+    if (/\b(unsubscribe|remove|delete)\b/i.test(msg)) {
+      return handleDeleteIntent('unsubscribe');
+    }
+    if (/\bmobile\b/i.test(msg)) {
+      return { reply: `What should ${subscriberName}'s mobile number be changed to?`, handled: true };
+    }
+    if (/\bname\b/i.test(msg)) {
+      return { reply: `What should ${subscriberName}'s name be changed to?`, handled: true };
+    }
+    return { reply: `What would you like to change for ${subscriberName} — name, mobile number, or unsubscribe from a goal?`, handled: true };
+  }
+
+  // Step 2: answering "what's the subscriber's name and mobile number?"
+  if (lastAssistant && EDIT_DETAILS_NAME_MOBILE_RE.test(lastAssistant.content)) {
+    const mobileMatch = msg.match(/\b(\d{6,15})\b/);
+    const subscriberName = mobileMatch ? mobileMatch[1] : msg.replace(/[.?!]+$/, '').trim();
+    if (!subscriberName) return { reply: 'What\'s the subscriber\'s name and mobile number?', handled: true };
+    return {
+      reply: `Here are ${subscriberName}'s details — check the panel that just opened. What would you like to change: name, mobile number, or unsubscribe from a goal?`,
+      action: { type: 'view_subscriber_details', params: { subscriberName } },
+      handled: true
+    };
+  }
+
+  return null;
+}
+
+function parseSubscriberFallbackMenu(msg, history) {
+  const safeHistory = Array.isArray(history) ? history : [];
+  const lastAssistant = [...safeHistory].reverse().find(h => h.role === 'assistant');
+
+  if (lastAssistant && SUBSCRIBER_MENU_RE.test(lastAssistant.content)) {
+    const choice = msg.trim().toLowerCase();
+
+    // Delete and edit checked first — both mention "subscriber"/"details"
+    // in ways that could otherwise be caught by the plainer add/view checks.
+    if (/^3\b/.test(choice) || /\b(delete|remove)\b/i.test(choice)) {
+      return handleDeleteIntent('delete subscriber');
+    }
+    if (/^5\b/.test(choice) || /\bedit\b/i.test(choice)) {
+      return { reply: 'Great — what\'s the subscriber\'s name and mobile number, so I can look up their details?', handled: true };
+    }
+    if (/^1\b/.test(choice) || /\badd\b/i.test(choice)) {
+      return { reply: 'Great — what\'s the subscriber\'s name?', handled: true };
+    }
+    if (/^2\b/.test(choice) || /\bview\b|\bdetails\b/i.test(choice)) {
+      return { reply: 'Opening Subscriber Details for you.', action: { type: 'view_subscriber_details', params: {} }, handled: true };
+    }
+    if (/^4\b/.test(choice) || /\bhow\b/i.test(choice)) {
+      return { reply: SUBSCRIBER_MENU_HOWTO_REPLY, handled: true };
+    }
+    if (/^6\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
+      const menuIndex = safeHistory.indexOf(lastAssistant);
+      const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
+      const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
+      return { reply: '', handled: false, escalateMessage };
+    }
+
+    // Unrecognized reply to the menu — re-ask rather than guess.
+    return { reply: SUBSCRIBER_MENU_QUESTION, handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bsubscribers?\b/i.test(msg)) {
+    return { reply: SUBSCRIBER_MENU_QUESTION, handled: true };
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------
 // FLOW OWNERSHIP — every confirm-first flow's fast-path check runs
 // unconditionally at the top of its own function, which is fine on a
 // fresh message but dangerous mid-flow: a reply meant as step 2 of one
@@ -1450,7 +1559,9 @@ const FLOW_OWNERS = [
   { markers: [WHATSAPP_BULK_CONFIRM_RE, WHATSAPP_BULK_WHICH_RE], fn: parseSendWhatsappReminders },
   { markers: [DOWNLOAD_RECEIPT_MOBILE_RE, DOWNLOAD_RECEIPT_GOAL_RE], fn: parseDownloadReceipt },
   { markers: [GOAL_MENU_RE], fn: parseGoalFallbackMenu },
-  { markers: [COLLECT_MENU_RE], fn: parseCollectFallbackMenu }
+  { markers: [COLLECT_MENU_RE], fn: parseCollectFallbackMenu },
+  { markers: [EDIT_DETAILS_NAME_MOBILE_RE, EDIT_DETAILS_WHAT_RE], fn: parseEditSubscriberDetailsLookup },
+  { markers: [SUBSCRIBER_MENU_RE], fn: parseSubscriberFallbackMenu }
 ];
 
 function parseLocalIntent(message, history) {
@@ -1582,6 +1693,11 @@ function parseLocalIntent(message, history) {
   // parseCollectFallbackMenu.
   const collectMenuResult = parseCollectFallbackMenu(msg, safeHistory);
   if (collectMenuResult) return collectMenuResult;
+
+  // Same last-resort placement, keyed on "subscriber"/"subscribers" — see
+  // the comment above parseSubscriberFallbackMenu.
+  const subscriberMenuResult = parseSubscriberFallbackMenu(msg, safeHistory);
+  if (subscriberMenuResult) return subscriberMenuResult;
 
   const faqHit = FAQ.find(item => item.test.test(msg));
   if (faqHit) return { reply: faqHit.reply, handled: true };

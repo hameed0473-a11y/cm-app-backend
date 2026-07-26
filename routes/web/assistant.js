@@ -66,6 +66,7 @@ You can perform these actions directly using tools, instead of just explaining t
 - create_payment_link: generates a shareable payment link for a subscriber, optionally for a specific goal.
 - send_whatsapp_reminders: sends bulk WhatsApp payment reminders, either to everyone with a pending due or for one specific goal.
 - download_receipt: re-downloads the receipt PDF for a subscriber's already-recorded payment on a goal.
+- view_subscriber_details: opens the Subscriber Details lookup panel, optionally pre-searched for a specific subscriber.
 - report_query: answers a read-only question from data already loaded (totals, dues, counts, plan info) — never a write.
 
 Rules for each tool:
@@ -88,6 +89,7 @@ Rules for each tool:
 - create_payment_link: needs a subscriber name; goalName is optional (omit if the user didn't mention a specific goal).
 - send_whatsapp_reminders: goalName is optional — omit it entirely to mean "everyone with a pending due" (the app's own "remind all" convention); include it only if the user named a specific goal.
 - download_receipt: needs a subscriber name and a goal name — this only re-downloads a receipt for a payment that was already recorded, never creates one.
+- view_subscriber_details: subscriberName is optional — omit it to just open the panel for the user to search themselves; include it if they named someone specific.
 - report_query: needs a metric — one of: total_collected (optionally scoped to "month"), pending_subscribers, subscriber_due (needs subscriberName), active_goals, subscriber_count, current_plan. Pick the metric that matches what the user asked; never guess a subscriber name for subscriber_due.
 - Never guess a name, amount, or category the user didn't say — ask a short clarifying question in plain text instead of calling a tool with incomplete information (except raise_ticket's category, which may default to "other").
 
@@ -375,6 +377,16 @@ const TOOLS = [
         goalName: { type: 'string', description: 'The goal this payment was recorded against.' }
       },
       required: ['subscriberName', 'goalName']
+    }
+  },
+  {
+    name: 'view_subscriber_details',
+    description: 'Open the Subscriber Details lookup panel, optionally pre-searched for a specific subscriber.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        subscriberName: { type: 'string', description: 'Optional — omit to just open the panel for the user to search themselves.' }
+      }
     }
   },
   {
