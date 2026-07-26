@@ -159,6 +159,14 @@ function cancelPendingFlowIfAny(msg, history) {
 // "create" + "goal").
 const HOW_TO_RE = /\bhow\s+(?:do|does|can|to)\b/i;
 
+// A fast-path regex capturing "whatever comes before/after a trigger word"
+// can accidentally capture generic filler ("a goal", "the", "the goal")
+// instead of a real name when the message was actually just the generic
+// trigger phrase itself (e.g. "mark a goal complete", "complete the
+// goal") — this catches that so it falls through to the step-by-step flow
+// instead of proposing a bogus name.
+const GENERIC_GOAL_WORDS_RE = /^(?:a|the|this|that|my|our|it)\s*(?:goal)?$/i;
+
 // Keyword-driven, confirm-first flow: a message merely containing
 // "create"/"add"/etc. + "goal"/"target"/"fund"/"pledge" is treated as a
 // probable (not certain) request, so the very first thing we do is ask the
@@ -319,23 +327,26 @@ function parseAddSubscriber(msg, history) {
 }
 
 const SUBSCRIBE_RE = /\bsubscribe\b\s+([a-z0-9 .'-]+?)\s+\bto\b\s+(?:the\s+)?(?:goal\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?(?:\s+goal)?[.?!]*$/i;
-const SUBSCRIBE_AMOUNT_CLARIFY_RE = /how much should .+ pay per period for/i;
 
-// "subscribe Ramesh to Diwali Fund at 500" — links an EXISTING subscriber to
-// an EXISTING goal, with the amount THEY specifically owe per period (never
-// the goal's own overall target, which is a different number and is often
-// unset — defaulting to it silently made new subscribers show as having no
-// dues, i.e. "already paid"). Deliberately keyed off the word "subscribe"
-// only (not "add ... to ... goal") to avoid colliding with create_goal's
-// own add/goal trigger words. Also handles the follow-up turn when the
-// amount wasn't given inline, by re-deriving the subscriber/goal from
-// whichever earlier user turn actually matched SUBSCRIBE_RE.
+// Steps: confirm -> which subscriber -> which goal -> per-period amount.
+// The fast path (SUBSCRIBE_RE matching in one shot, e.g. "subscribe Ramesh
+// to Diwali Fund at 500") still works without any confirmation, same as
+// before — the confirm-first flow only kicks in when "subscribe" is used
+// without that exact shape. Deliberately keyed off the word "subscribe"
+// only (not "add ... to ... goal") to avoid colliding with add_subscriber's
+// own trigger words.
+const SUBSCRIBE_CONFIRM_RE = /are you saying you'd like to subscribe someone to a goal/i;
+const SUBSCRIBE_WHO_RE = /^great — who should i subscribe\?$/i;
+const SUBSCRIBE_GOAL_RE = /^which goal should i subscribe (.+?) to\?$/i;
+const SUBSCRIBE_AMOUNT_RE = /how much should (.+?) pay per period for "([^"]+)"/i;
+PENDING_FLOW_MARKERS.push(SUBSCRIBE_CONFIRM_RE, SUBSCRIBE_WHO_RE, SUBSCRIBE_GOAL_RE, SUBSCRIBE_AMOUNT_RE);
+
 function parseSubscribeToGoal(msg, history) {
   const { rest, amount: strippedAmount } = stripTrailingAmount(msg);
-  const m = rest.match(SUBSCRIBE_RE) || msg.match(SUBSCRIBE_RE);
-  if (m) {
-    const subscriberName = m[1].trim();
-    const goalName = m[2].trim();
+  const fastMatch = rest.match(SUBSCRIBE_RE) || msg.match(SUBSCRIBE_RE);
+  if (fastMatch) {
+    const subscriberName = fastMatch[1].trim();
+    const goalName = fastMatch[2].trim();
     if (!strippedAmount) {
       return { reply: `How much should ${subscriberName} pay per period for "${goalName}"? Try: "subscribe ${subscriberName} to ${goalName} at 500".`, handled: true };
     }
@@ -346,104 +357,301 @@ function parseSubscribeToGoal(msg, history) {
     };
   }
 
-  // Not a fresh "subscribe X to Y" message — is it a reply to our own
-  // "how much should they pay?" follow-up?
   const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
-  if (!lastAssistant || !SUBSCRIBE_AMOUNT_CLARIFY_RE.test(lastAssistant.content)) return null;
 
-  let subscriberName = '', goalName = '';
-  for (let i = (history || []).length - 1; i >= 0; i--) {
-    if (history[i].role !== 'user') continue;
-    const found = history[i].content.match(SUBSCRIBE_RE);
-    if (found) { subscriberName = found[1].trim(); goalName = found[2].trim(); break; }
-  }
-  if (!subscriberName || !goalName) return null;
-
-  const amount = extractBareOrAtAmount(msg);
-  if (!amount) {
-    return { reply: `How much should ${subscriberName} pay per period for "${goalName}"? Try: "subscribe ${subscriberName} to ${goalName} at 500".`, handled: true };
-  }
-  return {
-    reply: 'Here\'s what I understood:',
-    action: { type: 'subscribe_to_goal', params: { subscriberName, goalName, amount } },
-    handled: true
-  };
-}
-
-// "pledge 1000 for Ramesh towards Diwali Fund"
-function parseCreatePledge(msg) {
-  const m = msg.match(/\bpledge\b\s+(?:of\s+)?(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)\s+for\s+([a-z0-9 .'-]+?)\s+(?:towards|for|to)\s+([a-z0-9 &.'-]+?)[.?!]*$/i);
-  if (!m) return { reply: 'Try: "pledge 1000 for Ramesh towards Diwali Fund".', handled: true };
-  return {
-    reply: 'Here\'s what I understood:',
-    action: { type: 'create_pledge', params: { amount: Number(m[1]) || 0, subscriberName: m[2].trim(), goalName: m[3].trim() } },
-    handled: true
-  };
-}
-
-// "mark Diwali Fund as complete" / "complete the Diwali Fund goal"
-function parseMarkComplete(msg) {
-  let m = msg.match(/\bmark\b\s+(?:the\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?\s+(?:as\s+)?complete/i);
-  if (!m) m = msg.match(/\bcomplete\b\s+(?:the\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?\s+goal/i);
-  if (!m) return { reply: 'Try: "mark Diwali Fund as complete".', handled: true };
-  return {
-    reply: 'Here\'s what I understood:',
-    action: { type: 'mark_goal_complete', params: { goalName: m[1].trim() } },
-    handled: true
-  };
-}
-
-// "stop Cleaning Charges from rolling over" / "turn off rollover for Cleaning Charges"
-function parseStopRollover(msg) {
-  let m = msg.match(/\bstop\b\s+(?:the\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?\s+from\s+rolling\s*over/i);
-  if (!m) m = msg.match(/(?:stop|turn off|disable)\b.*?\brollover\b\s+(?:for|on)\s+["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?[.?!]*$/i);
-  if (!m) return { reply: 'Try: "stop Cleaning Charges from rolling over".', handled: true };
-  return {
-    reply: 'Here\'s what I understood:',
-    action: { type: 'stop_rollover', params: { goalName: m[1].trim() } },
-    handled: true
-  };
-}
-
-// "add an expense of 2000 for flowers, category event expenses"
-function parseAddExpense(msg) {
-  const amtMatch = msg.match(/(?:expense|spent|paid)\s+(?:of\s+)?(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)/i) || msg.match(/(?:₹|\$|£|€|rs\.?)\s*(\d+(?:\.\d+)?)/i);
-  const amount = amtMatch ? Number(amtMatch[1]) || 0 : 0;
-  if (!amount) return { reply: 'I didn\'t catch the amount. Try: "add an expense of 2000 for flowers".', handled: true };
-
-  const forMatch = msg.match(/\bfor\s+([a-z0-9 .'-]+?)(?:,|\s+category\b|[.?!]*$)/i);
-  const description = forMatch ? forMatch[1].trim() : '';
-
-  const catMatch = msg.match(/\bcategory\s+([a-z &]+?)[.?!]*$/i);
-  const category = catMatch ? matchExpenseCategory(catMatch[1]) : matchExpenseCategory(msg);
-  if (!category) {
-    return { reply: `What category is this expense — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+  // Step 4: answering "how much should X pay per period for <goal>?"
+  if (lastAssistant && SUBSCRIBE_AMOUNT_RE.test(lastAssistant.content)) {
+    const [, subscriberName, goalName] = lastAssistant.content.match(SUBSCRIBE_AMOUNT_RE);
+    const amount = extractBareOrAtAmount(msg);
+    if (!amount) return { reply: `How much should ${subscriberName} pay per period for "${goalName}"? Reply e.g. "500".`, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'subscribe_to_goal', params: { subscriberName, goalName, amount } }, handled: true };
   }
 
-  return {
-    reply: 'Here\'s what I understood:',
-    action: { type: 'add_expense', params: { amount, description, category } },
-    handled: true
-  };
-}
-
-// "add a payee named XYZ Supplies, mobile 9998887776, category Maintenance"
-function parseAddPayee(msg) {
-  const { name, mobile } = extractNameMobile(msg, 'payee');
-  if (!name) return { reply: 'What\'s the payee\'s name? Try: "add a payee named XYZ Supplies, mobile 9998887776, category Maintenance".', handled: true };
-  if (!mobile) return { reply: `What's ${name}'s mobile number?`, handled: true };
-
-  const catMatch = msg.match(/\bcategory\s+([a-z &]+?)[.?!]*$/i);
-  const category = catMatch ? matchExpenseCategory(catMatch[1]) : matchExpenseCategory(msg);
-  if (!category) {
-    return { reply: `What category is this payee for — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+  // Step 3: answering "which goal should I subscribe X to?"
+  if (lastAssistant && SUBSCRIBE_GOAL_RE.test(lastAssistant.content)) {
+    const subscriberName = lastAssistant.content.match(SUBSCRIBE_GOAL_RE)[1];
+    const { rest: goalRest, amount } = stripTrailingAmount(msg);
+    const goalName = goalRest.replace(/[.?!]+$/, '').trim();
+    if (!goalName) return { reply: `Which goal should I subscribe ${subscriberName} to?`, handled: true };
+    if (!amount) return { reply: `How much should ${subscriberName} pay per period for "${goalName}"? Reply e.g. "${goalName} at 500".`, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'subscribe_to_goal', params: { subscriberName, goalName, amount } }, handled: true };
   }
 
-  return {
-    reply: 'Here\'s what I understood:',
-    action: { type: 'add_payee', params: { name, mobile, category } },
-    handled: true
-  };
+  // Step 2: answering "who should I subscribe?"
+  if (lastAssistant && SUBSCRIBE_WHO_RE.test(lastAssistant.content)) {
+    const subscriberName = msg.replace(/[.?!]+$/, '').trim();
+    if (!subscriberName) return { reply: 'Who should I subscribe?', handled: true };
+    return { reply: `Which goal should I subscribe ${subscriberName} to?`, handled: true };
+  }
+
+  // Step 1 (confirm): answering "are you saying you'd like to subscribe someone to a goal?"
+  if (lastAssistant && SUBSCRIBE_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — who should I subscribe?', handled: true };
+  }
+
+  // Step 0: loose keyword hit — "subscribe" without the full one-shot shape
+  if (!HOW_TO_RE.test(msg) && /\bsubscribe\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to subscribe someone to a goal?', handled: true };
+  }
+
+  return null;
+}
+
+// Steps: confirm -> who -> which goal -> pledge amount. The fast path
+// ("pledge 1000 for Ramesh towards Diwali Fund") still works in one shot.
+const CREATE_PLEDGE_RE = /\bpledge\b\s+(?:of\s+)?(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)\s+for\s+([a-z0-9 .'-]+?)\s+(?:towards|for|to)\s+([a-z0-9 &.'-]+?)[.?!]*$/i;
+const CREATE_PLEDGE_CONFIRM_RE = /are you saying you'd like to create a pledge/i;
+const CREATE_PLEDGE_WHO_RE = /^great — who is this pledge for\?$/i;
+const CREATE_PLEDGE_GOAL_RE = /^which event\/pledge goal is (.+?)'s pledge for\?$/i;
+const CREATE_PLEDGE_AMOUNT_RE = /^how much is (.+?) pledging (?:for|towards) "([^"]+)"\?$/i;
+PENDING_FLOW_MARKERS.push(CREATE_PLEDGE_CONFIRM_RE, CREATE_PLEDGE_WHO_RE, CREATE_PLEDGE_GOAL_RE, CREATE_PLEDGE_AMOUNT_RE);
+
+function parseCreatePledge(msg, history) {
+  const fastMatch = msg.match(CREATE_PLEDGE_RE);
+  if (fastMatch) {
+    return {
+      reply: 'Here\'s what I understood:',
+      action: { type: 'create_pledge', params: { amount: Number(fastMatch[1]) || 0, subscriberName: fastMatch[2].trim(), goalName: fastMatch[3].trim() } },
+      handled: true
+    };
+  }
+
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 4: answering "how much is X pledging towards <goal>?"
+  if (lastAssistant && CREATE_PLEDGE_AMOUNT_RE.test(lastAssistant.content)) {
+    const [, subscriberName, goalName] = lastAssistant.content.match(CREATE_PLEDGE_AMOUNT_RE);
+    const amount = extractBareOrAtAmount(msg);
+    if (!amount) return { reply: `How much is ${subscriberName} pledging towards "${goalName}"?`, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'create_pledge', params: { amount, subscriberName, goalName } }, handled: true };
+  }
+
+  // Step 3: answering "which event/pledge goal is X's pledge for?"
+  if (lastAssistant && CREATE_PLEDGE_GOAL_RE.test(lastAssistant.content)) {
+    const subscriberName = lastAssistant.content.match(CREATE_PLEDGE_GOAL_RE)[1];
+    const { rest, amount } = stripTrailingAmount(msg);
+    const goalName = rest.replace(/[.?!]+$/, '').trim();
+    if (!goalName) return { reply: `Which event/pledge goal is ${subscriberName}'s pledge for?`, handled: true };
+    if (!amount) return { reply: `How much is ${subscriberName} pledging towards "${goalName}"?`, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'create_pledge', params: { amount, subscriberName, goalName } }, handled: true };
+  }
+
+  // Step 2: answering "who is this pledge for?"
+  if (lastAssistant && CREATE_PLEDGE_WHO_RE.test(lastAssistant.content)) {
+    const subscriberName = msg.replace(/[.?!]+$/, '').trim();
+    if (!subscriberName) return { reply: 'Who is this pledge for?', handled: true };
+    return { reply: `Which event/pledge goal is ${subscriberName}'s pledge for?`, handled: true };
+  }
+
+  // Step 1 (confirm)
+  if (lastAssistant && CREATE_PLEDGE_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — who is this pledge for?', handled: true };
+  }
+
+  // Step 0: loose "pledge" keyword hit, not matching the one-shot shape.
+  // Excludes create/add/start/setup wording — "create a pledge" means a
+  // new pledge-category GOAL (create_goal, handled by parseCreateGoal),
+  // not recording an existing subscriber's pledge amount against one.
+  if (!HOW_TO_RE.test(msg) && /\bpledge\b/i.test(msg) && !/\b(create|add|start|set ?up)\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to create a pledge?', handled: true };
+  }
+
+  return null;
+}
+
+// Steps: confirm -> which goal. Fast path ("mark Diwali Fund as complete" /
+// "complete the Diwali Fund goal") still works in one shot.
+const MARK_COMPLETE_CONFIRM_RE = /are you saying you'd like to mark a goal (?:as )?complete/i;
+const MARK_COMPLETE_NAME_RE = /^great — which goal should i mark complete\?$/i;
+PENDING_FLOW_MARKERS.push(MARK_COMPLETE_CONFIRM_RE, MARK_COMPLETE_NAME_RE);
+
+function parseMarkComplete(msg, history) {
+  let fastMatch = msg.match(/\bmark\b\s+(?:the\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?\s+(?:as\s+)?complete/i);
+  if (!fastMatch) fastMatch = msg.match(/\bcomplete\b\s+(?:the\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?\s+goal/i);
+  // A generic trigger phrase like "mark a goal complete" isn't naming a
+  // real goal called "a goal" — treat it as no match so it falls through
+  // to the step-by-step flow instead.
+  if (fastMatch && GENERIC_GOAL_WORDS_RE.test(fastMatch[1].trim())) fastMatch = null;
+  if (fastMatch) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'mark_goal_complete', params: { goalName: fastMatch[1].trim() } }, handled: true };
+  }
+
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  if (lastAssistant && MARK_COMPLETE_NAME_RE.test(lastAssistant.content)) {
+    const goalName = msg.replace(/[.?!]+$/, '').trim();
+    if (!goalName) return { reply: 'Which goal should I mark complete?', handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'mark_goal_complete', params: { goalName } }, handled: true };
+  }
+
+  if (lastAssistant && MARK_COMPLETE_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — which goal should I mark complete?', handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bcomplete\b/i.test(msg) && /\bgoal\b|\bmark\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to mark a goal complete?', handled: true };
+  }
+
+  return null;
+}
+
+// Steps: confirm -> which goal. Fast path ("stop Cleaning Charges from
+// rolling over" / "turn off rollover for Cleaning Charges") still works.
+const STOP_ROLLOVER_CONFIRM_RE = /are you saying you'd like to stop a goal from rolling over/i;
+const STOP_ROLLOVER_NAME_RE = /^great — which goal should i stop from rolling over\?$/i;
+PENDING_FLOW_MARKERS.push(STOP_ROLLOVER_CONFIRM_RE, STOP_ROLLOVER_NAME_RE);
+
+function parseStopRollover(msg, history) {
+  let fastMatch = msg.match(/\bstop\b\s+(?:the\s+)?["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?\s+from\s+rolling\s*over/i);
+  if (!fastMatch) fastMatch = msg.match(/(?:stop|turn off|disable)\b.*?\brollover\b\s+(?:for|on)\s+["“]?([a-z0-9][a-z0-9 &'-]*?)["”]?[.?!]*$/i);
+  if (fastMatch) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'stop_rollover', params: { goalName: fastMatch[1].trim() } }, handled: true };
+  }
+
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  if (lastAssistant && STOP_ROLLOVER_NAME_RE.test(lastAssistant.content)) {
+    const goalName = msg.replace(/[.?!]+$/, '').trim();
+    if (!goalName) return { reply: 'Which goal should I stop from rolling over?', handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'stop_rollover', params: { goalName } }, handled: true };
+  }
+
+  if (lastAssistant && STOP_ROLLOVER_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — which goal should I stop from rolling over?', handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && (/\brollover\b|\brolling over\b/i.test(msg)) && /\b(stop|turn off|disable)\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to stop a goal from rolling over?', handled: true };
+  }
+
+  return null;
+}
+
+// Steps: confirm -> amount -> category (-> optional description folded into
+// the category answer if present). Fast path ("add an expense of 2000 for
+// flowers, category event expenses") still works in one shot.
+const ADD_EXPENSE_CONFIRM_RE = /are you saying you'd like to add an expense/i;
+const ADD_EXPENSE_AMOUNT_RE = /^great — how much was the expense\?$/i;
+const ADD_EXPENSE_CATEGORY_RE = /^what category is this (?:rs\.?|inr|₹|\$|£|€)?\s*[\d,.]+\s*expense — one of:/i;
+PENDING_FLOW_MARKERS.push(ADD_EXPENSE_CONFIRM_RE, ADD_EXPENSE_AMOUNT_RE, ADD_EXPENSE_CATEGORY_RE);
+
+function parseAddExpense(msg, history) {
+  const fastAmtMatch = msg.match(/(?:expense|spent|paid)\s+(?:of\s+)?(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)/i) || msg.match(/(?:₹|\$|£|€|rs\.?)\s*(\d+(?:\.\d+)?)/i);
+  if (fastAmtMatch) {
+    const amount = Number(fastAmtMatch[1]) || 0;
+    const forMatch = msg.match(/\bfor\s+([a-z0-9 .'-]+?)(?:,|\s+category\b|[.?!]*$)/i);
+    const description = forMatch ? forMatch[1].trim() : '';
+    const catMatch = msg.match(/\bcategory\s+([a-z &]+?)[.?!]*$/i);
+    const category = catMatch ? matchExpenseCategory(catMatch[1]) : matchExpenseCategory(msg);
+    if (category) {
+      return { reply: 'Here\'s what I understood:', action: { type: 'add_expense', params: { amount, description, category } }, handled: true };
+    }
+    return { reply: `What category is this ${formatMoney(amount)} expense — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+  }
+
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 3: answering the category question
+  if (lastAssistant && ADD_EXPENSE_CATEGORY_RE.test(lastAssistant.content)) {
+    const amountMatch = lastAssistant.content.match(/is this (?:rs\.?|inr|₹|\$|£|€)?\s*([\d,.]+)\s*expense/i);
+    const amount = amountMatch ? Number(amountMatch[1].replace(/,/g, '')) || 0 : 0;
+    const category = matchExpenseCategory(msg);
+    if (!category) return { reply: `What category is this ${formatMoney(amount)} expense — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+    const forMatch = msg.match(/\bfor\s+([a-z0-9 .'-]+?)[.?!]*$/i);
+    const description = forMatch ? forMatch[1].trim() : '';
+    return { reply: 'Here\'s what I understood:', action: { type: 'add_expense', params: { amount, description, category } }, handled: true };
+  }
+
+  // Step 2: answering "how much was the expense?"
+  if (lastAssistant && ADD_EXPENSE_AMOUNT_RE.test(lastAssistant.content)) {
+    const amount = extractBareOrAtAmount(msg);
+    if (!amount) return { reply: 'How much was the expense?', handled: true };
+    const category = matchExpenseCategory(msg);
+    if (category) {
+      return { reply: 'Here\'s what I understood:', action: { type: 'add_expense', params: { amount, description: '', category } }, handled: true };
+    }
+    return { reply: `What category is this ${formatMoney(amount)} expense — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+  }
+
+  // Step 1 (confirm)
+  if (lastAssistant && ADD_EXPENSE_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — how much was the expense?', handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bexpense\b/i.test(msg) && /\b(add|log|record)\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to add an expense?', handled: true };
+  }
+
+  return null;
+}
+
+function formatMoney(n) {
+  return (n || 0).toLocaleString('en-IN');
+}
+
+// Steps: confirm -> name -> mobile -> category. Fast path ("add a payee
+// named XYZ Supplies, mobile 9998887776, category Maintenance") still works.
+const ADD_PAYEE_CONFIRM_RE = /are you saying you'd like to add a new payee/i;
+const ADD_PAYEE_NAME_RE = /^great — what's the payee's name\?$/i;
+const ADD_PAYEE_MOBILE_RE = /^what's (.+?)'s mobile number\? \(payee\)$/i;
+const ADD_PAYEE_CATEGORY_RE = /^what category is (.+?) \(mobile (\d+)\) for — one of:/i;
+PENDING_FLOW_MARKERS.push(ADD_PAYEE_CONFIRM_RE, ADD_PAYEE_NAME_RE, ADD_PAYEE_MOBILE_RE, ADD_PAYEE_CATEGORY_RE);
+
+function parseAddPayee(msg, history) {
+  const fastNameMobile = extractNameMobile(msg, 'payee');
+  if (fastNameMobile.name && fastNameMobile.mobile) {
+    const catMatch = msg.match(/\bcategory\s+([a-z &]+?)[.?!]*$/i);
+    const category = catMatch ? matchExpenseCategory(catMatch[1]) : matchExpenseCategory(msg);
+    if (category) {
+      return { reply: 'Here\'s what I understood:', action: { type: 'add_payee', params: { name: fastNameMobile.name, mobile: fastNameMobile.mobile, category } }, handled: true };
+    }
+    return { reply: `What category is ${fastNameMobile.name} (mobile ${fastNameMobile.mobile}) for — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+  }
+
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 4: answering the category question
+  if (lastAssistant && ADD_PAYEE_CATEGORY_RE.test(lastAssistant.content)) {
+    const [, name, mobile] = lastAssistant.content.match(ADD_PAYEE_CATEGORY_RE);
+    const category = matchExpenseCategory(msg);
+    if (!category) return { reply: `What category is ${name} (mobile ${mobile}) for — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'add_payee', params: { name, mobile, category } }, handled: true };
+  }
+
+  // Step 3: answering "what's X's mobile number?"
+  if (lastAssistant && ADD_PAYEE_MOBILE_RE.test(lastAssistant.content)) {
+    const name = lastAssistant.content.match(ADD_PAYEE_MOBILE_RE)[1];
+    const mobileMatch = msg.match(/\b(\d{6,15})\b/);
+    if (!mobileMatch) return { reply: `What's ${name}'s mobile number? (payee)`, handled: true };
+    return { reply: `What category is ${name} (mobile ${mobileMatch[1]}) for — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+  }
+
+  // Step 2: answering "what's the payee's name?"
+  if (lastAssistant && ADD_PAYEE_NAME_RE.test(lastAssistant.content)) {
+    const mobileMatch = msg.match(/\b(\d{6,15})\b/);
+    let name = msg.replace(/^(?:it'?s|its|name is|call(?:ed)?)\s+/i, '').replace(/[.?!]+$/, '').trim();
+    if (mobileMatch) name = name.replace(mobileMatch[0], '').replace(/[,\s]+$/, '').trim();
+    if (!name) return { reply: 'What\'s the payee\'s name?', handled: true };
+    if (mobileMatch) return { reply: `What category is ${name} (mobile ${mobileMatch[1]}) for — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+    return { reply: `What's ${name}'s mobile number? (payee)`, handled: true };
+  }
+
+  // Step 1 (confirm)
+  if (lastAssistant && ADD_PAYEE_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — what\'s the payee\'s name?', handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bpayee\b/i.test(msg) && /\b(add|create|register)\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to add a new payee?', handled: true };
+  }
+
+  return null;
 }
 
 function matchTicketCategory(text) {
@@ -455,11 +663,16 @@ function matchTicketCategory(text) {
   return 'other';
 }
 
-// "raise a support ticket about payment delay" — category classification is
-// low-stakes (support routing, not a financial/data-shape decision), so
-// unlike goal category this is allowed to default to "other" rather than
-// blocking on a clarifying question.
-function parseRaiseTicket(msg) {
+// Steps: confirm -> description (category classified from it, defaulting to
+// "other" — low-stakes support routing, not a financial/data-shape
+// decision, so unlike goal category this never blocks on a clarifying
+// question). Fast path ("raise a support ticket about payment delay")
+// still works in one shot.
+const RAISE_TICKET_CONFIRM_RE = /are you saying you'd like to raise a support ticket/i;
+const RAISE_TICKET_DESC_RE = /^great — what's the issue\?$/i;
+PENDING_FLOW_MARKERS.push(RAISE_TICKET_CONFIRM_RE, RAISE_TICKET_DESC_RE);
+
+function raiseTicketFromText(msg) {
   const category = matchTicketCategory(msg);
   let description = msg
     .replace(/\b(raise|open|create|submit)\b/gi, '')
@@ -469,45 +682,113 @@ function parseRaiseTicket(msg) {
     .replace(/^[\s,]+|[\s,]+$/g, '')
     .trim();
   if (!description) description = msg.trim();
-  return {
-    reply: 'Here\'s what I understood:',
-    action: { type: 'raise_ticket', params: { category, description } },
-    handled: true
-  };
+  return { reply: 'Here\'s what I understood:', action: { type: 'raise_ticket', params: { category, description } }, handled: true };
 }
 
-// "change Ramesh's mobile number to 9998887766" / "update Ramesh's name to Suresh"
-function parseEditSubscriber(msg) {
-  let m = msg.match(/(?:change|update|edit)\s+([a-z][a-z0-9 .'-]*?)'s\s+mobile(?:\s+number)?\s+to\s+(\d{6,15})/i);
-  if (m) {
-    return {
-      reply: 'Here\'s what I understood:',
-      action: { type: 'edit_subscriber', params: { subscriberName: m[1].trim(), mobile: m[2].trim() } },
-      handled: true
-    };
+function parseRaiseTicket(msg, history) {
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  if (lastAssistant && RAISE_TICKET_DESC_RE.test(lastAssistant.content)) {
+    if (!msg.trim()) return { reply: 'What\'s the issue?', handled: true };
+    return raiseTicketFromText(msg);
   }
 
-  m = msg.match(/(?:change|update|edit)\s+([a-z][a-z0-9 .'-]*?)'s\s+name\s+to\s+([a-z][a-z0-9 .'-]*?)[.?!]*$/i);
-  if (m) {
-    return {
-      reply: 'Here\'s what I understood:',
-      action: { type: 'edit_subscriber', params: { subscriberName: m[1].trim(), name: m[2].trim() } },
-      handled: true
-    };
+  if (lastAssistant && RAISE_TICKET_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — what\'s the issue?', handled: true };
   }
 
-  return { reply: 'Try: "change Ramesh\'s mobile number to 9998887766" or "change Ramesh\'s name to Suresh".', handled: true };
+  if (!HOW_TO_RE.test(msg) && /\bticket\b/i.test(msg) && /\b(raise|open|create|submit)\b/i.test(msg)) {
+    // If the message already carries a real description beyond just "raise
+    // a ticket", skip the confirm question — it's unambiguous either way.
+    const bareMatch = /^\s*(?:please\s+)?(?:raise|open|create|submit)\s+(?:a\s+)?(?:support\s+)?ticket\s*[.?!]*$/i.test(msg);
+    if (!bareMatch) return raiseTicketFromText(msg);
+    return { reply: 'Are you saying you\'d like to raise a support ticket?', handled: true };
+  }
+
+  return null;
+}
+
+// Steps: confirm -> which field (mobile or name) -> new value. Fast path
+// ("change Ramesh's mobile number to 9998887766" / "change Ramesh's name to
+// Suresh") still works in one shot.
+const EDIT_SUBSCRIBER_CONFIRM_RE = /are you saying you'd like to edit a subscriber's details/i;
+const EDIT_SUBSCRIBER_WHO_RE = /^great — which subscriber, and should i change their mobile number or their name\?$/i;
+const EDIT_SUBSCRIBER_VALUE_RE = /^what should (.+?)'s (mobile number|name) be changed to\?$/i;
+PENDING_FLOW_MARKERS.push(EDIT_SUBSCRIBER_CONFIRM_RE, EDIT_SUBSCRIBER_WHO_RE, EDIT_SUBSCRIBER_VALUE_RE);
+
+function parseEditSubscriber(msg, history) {
+  let fastMatch = msg.match(/(?:change|update|edit)\s+([a-z][a-z0-9 .'-]*?)'s\s+mobile(?:\s+number)?\s+to\s+(\d{6,15})/i);
+  if (fastMatch) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'edit_subscriber', params: { subscriberName: fastMatch[1].trim(), mobile: fastMatch[2].trim() } }, handled: true };
+  }
+  fastMatch = msg.match(/(?:change|update|edit)\s+([a-z][a-z0-9 .'-]*?)'s\s+name\s+to\s+([a-z][a-z0-9 .'-]*?)[.?!]*$/i);
+  if (fastMatch) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'edit_subscriber', params: { subscriberName: fastMatch[1].trim(), name: fastMatch[2].trim() } }, handled: true };
+  }
+
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 3: answering "what should X's mobile/name be changed to?"
+  if (lastAssistant && EDIT_SUBSCRIBER_VALUE_RE.test(lastAssistant.content)) {
+    const [, subscriberName, field] = lastAssistant.content.match(EDIT_SUBSCRIBER_VALUE_RE);
+    const value = msg.replace(/[.?!]+$/, '').trim();
+    if (!value) return { reply: `What should ${subscriberName}'s ${field} be changed to?`, handled: true };
+    if (field === 'mobile number') {
+      const mobileMatch = value.match(/\d{6,15}/);
+      if (!mobileMatch) return { reply: `What should ${subscriberName}'s mobile number be changed to?`, handled: true };
+      return { reply: 'Here\'s what I understood:', action: { type: 'edit_subscriber', params: { subscriberName, mobile: mobileMatch[0] } }, handled: true };
+    }
+    return { reply: 'Here\'s what I understood:', action: { type: 'edit_subscriber', params: { subscriberName, name: value } }, handled: true };
+  }
+
+  // Step 2: answering "which subscriber, and mobile or name?"
+  if (lastAssistant && EDIT_SUBSCRIBER_WHO_RE.test(lastAssistant.content)) {
+    const isMobile = /\bmobile\b/i.test(msg);
+    const isName = /\bname\b/i.test(msg);
+    const subscriberName = msg
+      .replace(/\b(mobile(?:\s+number)?|name)\b/gi, '')
+      .replace(/[,.]/g, '')
+      .trim();
+    if (!subscriberName) return { reply: 'Which subscriber, and should I change their mobile number or their name?', handled: true };
+    if (!isMobile && !isName) {
+      return { reply: `Should I change ${subscriberName}'s mobile number or their name?`, handled: true };
+    }
+    const field = isMobile ? 'mobile number' : 'name';
+    return { reply: `What should ${subscriberName}'s ${field} be changed to?`, handled: true };
+  }
+
+  // Step 1 (confirm)
+  if (lastAssistant && EDIT_SUBSCRIBER_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Great — which subscriber, and should I change their mobile number or their name?', handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\b(change|update|edit)\b/i.test(msg) && /\bsubscriber\b|\bcontributor\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to edit a subscriber\'s details?', handled: true };
+  }
+
+  return null;
 }
 
 // "reopen my last support ticket" / "reopen my ticket" — always resolved
 // against the account's own most-recently-solved ticket, never guessed by
 // description (too error-prone from voice), so no name/id extraction here.
-function parseReopenTicket() {
-  return {
-    reply: 'Here\'s what I understood:',
-    action: { type: 'reopen_ticket', params: {} },
-    handled: true
-  };
+// Confirm-first like everything else, but has no fields to collect after
+// that — a "yes" goes straight to proposing the action.
+const REOPEN_TICKET_CONFIRM_RE = /are you saying you'd like to reopen your last support ticket/i;
+PENDING_FLOW_MARKERS.push(REOPEN_TICKET_CONFIRM_RE);
+
+function parseReopenTicket(msg, history) {
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+  if (lastAssistant && REOPEN_TICKET_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: 'Here\'s what I understood:', action: { type: 'reopen_ticket', params: {} }, handled: true };
+  }
+  if (!HOW_TO_RE.test(msg) && /\bticket\b/i.test(msg) && /\breopen\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to reopen your last support ticket?', handled: true };
+  }
+  return null;
 }
 
 // Read-only report/query intents — answerable entirely from data the
@@ -550,17 +831,35 @@ function parseReportQuery(msg) {
   return null;
 }
 
-// "change my currency to USD" / "set currency to euros"
-function parseSetCurrency(msg) {
-  const currency = matchCurrency(msg);
-  if (!currency) {
+// Steps: confirm -> which currency. Fast path ("change my currency to USD"
+// / "set currency to euros" — currency already named) still works in one
+// shot, skipping the confirm question since it's unambiguous either way.
+const SET_CURRENCY_CONFIRM_RE = /are you saying you'd like to change your collection currency/i;
+const SET_CURRENCY_WHICH_RE = new RegExp(`^great — which currency — one of: ${SUPPORTED_CURRENCIES.join(', ')}\\?$`);
+PENDING_FLOW_MARKERS.push(SET_CURRENCY_CONFIRM_RE, SET_CURRENCY_WHICH_RE);
+
+function parseSetCurrency(msg, history) {
+  const fastCurrency = matchCurrency(msg);
+  if (fastCurrency) {
+    return { reply: 'Here\'s what I understood:', action: { type: 'set_currency', params: { currency: fastCurrency } }, handled: true };
+  }
+
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  if (lastAssistant && SET_CURRENCY_WHICH_RE.test(lastAssistant.content)) {
     return { reply: `Which currency — one of: ${SUPPORTED_CURRENCIES.join(', ')}?`, handled: true };
   }
-  return {
-    reply: 'Here\'s what I understood:',
-    action: { type: 'set_currency', params: { currency } },
-    handled: true
-  };
+
+  if (lastAssistant && SET_CURRENCY_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    return { reply: `Great — which currency — one of: ${SUPPORTED_CURRENCIES.join(', ')}?`, handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bcurrency\b/i.test(msg) && /\b(change|set|switch)\b/i.test(msg)) {
+    return { reply: 'Are you saying you\'d like to change your collection currency?', handled: true };
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------
@@ -590,6 +889,11 @@ function detectDeleteTarget(msg) {
   if (/\bunsubscribe\b|\bsubscription\b/i.test(msg)) return 'subscription';
   if (/\bgoal\b/i.test(msg) && /\bfrom\b/i.test(msg)) return 'subscription';
   if (/\bgoal\b/i.test(msg)) return 'goal';
+  // "remove/delete <name> from <goal name>" — no literal "goal"/"subscribe"
+  // word needed (e.g. the sheet's own example "Remove Ramesh from Diwali
+  // Fund") — a bare "from" clause on a removal request almost always means
+  // taking someone off a goal, not deleting the subscriber outright.
+  if (/\bfrom\b/i.test(msg)) return 'subscription';
   if (/\bsubscriber\b|\bcontributor\b/i.test(msg)) return 'subscriber';
   return null;
 }
@@ -652,41 +956,32 @@ function parseLocalIntent(message, history) {
   const subscribeResult = parseSubscribeToGoal(msg, safeHistory);
   if (subscribeResult) return subscribeResult;
 
-  if (/\bpledge\b/i.test(msg) && !/\b(create|add|start|set ?up)\b/i.test(msg)) {
-    return parseCreatePledge(msg);
-  }
+  const createPledgeResult = parseCreatePledge(msg, safeHistory);
+  if (createPledgeResult) return createPledgeResult;
 
-  if (/\bcomplete\b/i.test(msg) && /\bgoal\b|\bmark\b/i.test(msg)) {
-    return parseMarkComplete(msg);
-  }
+  const markCompleteResult = parseMarkComplete(msg, safeHistory);
+  if (markCompleteResult) return markCompleteResult;
 
-  if (/\brollover\b|\brolling over\b/i.test(msg) && /\b(stop|turn off|disable)\b/i.test(msg)) {
-    return parseStopRollover(msg);
-  }
+  const stopRolloverResult = parseStopRollover(msg, safeHistory);
+  if (stopRolloverResult) return stopRolloverResult;
 
-  if (/\bexpense\b/i.test(msg) && /\b(add|log|record)\b/i.test(msg)) {
-    return parseAddExpense(msg);
-  }
+  const addExpenseResult = parseAddExpense(msg, safeHistory);
+  if (addExpenseResult) return addExpenseResult;
 
-  if (/\bpayee\b/i.test(msg) && /\b(add|create|register)\b/i.test(msg)) {
-    return parseAddPayee(msg);
-  }
+  const addPayeeResult = parseAddPayee(msg, safeHistory);
+  if (addPayeeResult) return addPayeeResult;
 
-  if (/\bticket\b/i.test(msg) && /\breopen\b/i.test(msg)) {
-    return parseReopenTicket();
-  }
+  const reopenTicketResult = parseReopenTicket(msg, safeHistory);
+  if (reopenTicketResult) return reopenTicketResult;
 
-  if (/\bticket\b/i.test(msg) && /\b(raise|open|create|submit)\b/i.test(msg)) {
-    return parseRaiseTicket(msg);
-  }
+  const raiseTicketResult = parseRaiseTicket(msg, safeHistory);
+  if (raiseTicketResult) return raiseTicketResult;
 
-  if (/\bcurrency\b/i.test(msg) && /\b(change|set|switch)\b/i.test(msg)) {
-    return parseSetCurrency(msg);
-  }
+  const setCurrencyResult = parseSetCurrency(msg, safeHistory);
+  if (setCurrencyResult) return setCurrencyResult;
 
-  if (/'s\s+(?:mobile(?:\s+number)?|name)\s+to\b/i.test(msg) && /\b(change|update|edit)\b/i.test(msg)) {
-    return parseEditSubscriber(msg);
-  }
+  const editSubscriberResult = parseEditSubscriber(msg, safeHistory);
+  if (editSubscriberResult) return editSubscriberResult;
 
   const wantsCollect = /\b(collect(?:ed)?|record(?:ed)?|received)\b/i.test(msg) && /\bfrom\b/i.test(msg);
   if (wantsCollect) {
