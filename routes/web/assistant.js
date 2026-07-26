@@ -4,6 +4,7 @@ require('dotenv').config();
 const { requireProOrStaffToken } = require('../../middleware/auth');
 const { rateLimit } = require('../../middleware/rateLimit');
 const { parseLocalIntent } = require('../../utils/assistantLocalIntent');
+const supabase = require('../../lib/supabase');
 
 const router = express.Router();
 
@@ -288,6 +289,23 @@ const TOOLS = [
 
 const TOOL_NAMES = new Set(TOOLS.map(t => t.name));
 
+// Every message the local parser doesn't recognize is logged here — a
+// durable, queryable record of what's actually reaching (or would reach)
+// Claude, so recurring phrasings can be spotted and turned into new
+// predefined local-parser tasks over time, rather than paying to escalate
+// the same kind of question indefinitely. Best-effort only: never blocks
+// or fails the actual assistant response.
+async function logEscalation(userId, message, hadApiKey) {
+  try {
+    const { error } = await supabase.from('assistant_escalations').insert([{
+      user_id: userId, message, had_api_key: hadApiKey
+    }]);
+    if (error) console.warn('[escalation-log] insert skipped:', error.message);
+  } catch (err) {
+    console.warn('[escalation-log] insert threw:', err?.message || err);
+  }
+}
+
 router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken, async (req, res) => {
   const { message, history } = req.body;
 
@@ -307,6 +325,12 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
 
   // Try the free local parser first, on every request, key or no key.
   const local = parseLocalIntent(message.trim(), priorTurns);
+  if (!local.handled) {
+    // Logged whether or not a key is configured — a message the local
+    // parser doesn't recognize is a candidate for a new predefined task
+    // either way, not just when it actually reaches Claude.
+    logEscalation(req.proUserId, message.trim(), !!process.env.ANTHROPIC_API_KEY);
+  }
   if (local.handled || !process.env.ANTHROPIC_API_KEY) {
     const responseBody = { success: true, reply: local.reply };
     if (local.action) responseBody.action = local.action;
