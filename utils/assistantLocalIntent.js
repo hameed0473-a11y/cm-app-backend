@@ -117,6 +117,9 @@ function matchCurrency(text) {
 // top-level delete/remove intent check would otherwise swallow "cancel".
 const AFFIRMATIVE_RE = /^\s*(yes|yeah|yep|yup|correct|right|sure|ok(?:ay)?|confirm|go ahead|please do)\b/i;
 const CANCEL_RE = /^\s*(no|nope|nah|never ?mind|don'?t|cancel|stop|back|exit|forget it)\b/i;
+// A bare greeting with nothing else — answered locally (see parseLocalIntent)
+// instead of spending a Claude call on "hi"/"hello" alone.
+const GREETING_RE = /^\s*(hi+|hello+|hey+|hola|good\s?morning|good\s?afternoon|good\s?evening)\s*[.!]*$/i;
 
 // The three questions the create-goal flow asks, in order — recognized on
 // the assistant's own prior message so a short follow-up reply ("yes", a
@@ -1379,6 +1382,22 @@ function parseLocalIntent(message, history) {
       const ownerResult = owner.fn(msg, safeHistory);
       if (ownerResult) return ownerResult;
     }
+  }
+
+  // A bare cancel word or greeting with NOTHING actually pending (no flow
+  // matched above) — reaching here at all already proves that, since
+  // cancelPendingFlowIfAny and every FLOW_OWNERS entry above would have
+  // returned first if there were something real to cancel/continue.
+  // Answer locally instead of either (a) escalating a one-word message
+  // like "no"/"exit"/"hi" to Claude with nothing to go on, or (b) letting
+  // a bare "cancel"/"stop" fall into the delete-intent gate just below,
+  // which would otherwise misfire a "not authorized to delete" refusal
+  // about nothing in particular.
+  if (CANCEL_RE.test(msg)) {
+    return { reply: 'There\'s nothing pending to cancel right now. What would you like to do?', handled: true };
+  }
+  if (GREETING_RE.test(msg)) {
+    return { reply: 'Hi! What would you like to do — name a sidebar section (e.g. "goal", "subscriber", "expense") or just tell me directly.', handled: true };
   }
 
   if (/\b(delete|remove|unsubscribe|cancel)\b/i.test(msg) && !(/\bpayee\b/i.test(msg) && /\bcategor/i.test(msg))) {
