@@ -390,10 +390,20 @@ const TOOL_NAMES = new Set(TOOLS.map(t => t.name));
 // predefined local-parser tasks over time, rather than paying to escalate
 // the same kind of question indefinitely. Best-effort only: never blocks
 // or fails the actual assistant response.
-async function logEscalation(userId, message, hadApiKey) {
+//
+// assistantReply/actionType/actionParams capture what Claude actually did
+// with the message (its text reply, and any tool it called) — not just
+// what was asked. Reviewing these together is what makes it possible to
+// judge whether Claude's interpretation was actually right before turning
+// a recurring phrasing into a new local-parser task, rather than only
+// seeing the raw question with no idea how well it was already handled.
+async function logEscalation(userId, message, hadApiKey, assistantReply, actionType, actionParams) {
   try {
     const { error } = await supabase.from('assistant_escalations').insert([{
-      user_id: userId, message, had_api_key: hadApiKey
+      user_id: userId, message, had_api_key: hadApiKey,
+      assistant_reply: assistantReply || null,
+      action_type: actionType || null,
+      action_params: actionParams || null
     }]);
     if (error) console.warn('[escalation-log] insert skipped:', error.message);
   } catch (err) {
@@ -420,16 +430,19 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
 
   // Try the free local parser first, on every request, key or no key.
   const local = parseLocalIntent(message.trim(), priorTurns);
-  if (!local.handled) {
-    // Logged whether or not a key is configured — a message the local
-    // parser doesn't recognize is a candidate for a new predefined task
-    // either way, not just when it actually reaches Claude.
-    logEscalation(req.proUserId, message.trim(), !!process.env.ANTHROPIC_API_KEY);
-  }
-  if (local.handled || !process.env.ANTHROPIC_API_KEY) {
+  if (local.handled) {
     const responseBody = { success: true, reply: local.reply };
     if (local.action) responseBody.action = local.action;
     return res.json(responseBody);
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    // Logged whether or not a key is configured — a message the local
+    // parser doesn't recognize is a candidate for a new predefined task
+    // either way, not just when it actually reaches Claude. No reply/action
+    // to record here since Claude was never called.
+    logEscalation(req.proUserId, message.trim(), false);
+    return res.json({ success: true, reply: local.reply });
   }
 
   // Local parser wasn't confident this is a known pattern — escalate to Claude.
@@ -463,6 +476,7 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
 
     if (!response.ok) {
       console.error('Assistant API error:', data?.error || data);
+      logEscalation(req.proUserId, message.trim(), true);
       return res.status(502).json({ error: 'The assistant is temporarily unavailable. Please try again.' });
     }
 
@@ -489,9 +503,15 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
       responseBody.reply = "Sorry, I couldn't come up with an answer to that.";
     }
 
+    logEscalation(
+      req.proUserId, message.trim(), true,
+      responseBody.reply, toolUse?.name, toolUse?.input
+    );
+
     res.json(responseBody);
   } catch (err) {
     console.error('Assistant request failed:', err.message);
+    logEscalation(req.proUserId, message.trim(), true);
     res.status(502).json({ error: 'The assistant is temporarily unavailable. Please try again.' });
   }
 });
