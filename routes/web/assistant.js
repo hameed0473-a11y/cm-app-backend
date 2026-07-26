@@ -65,6 +65,7 @@ You can perform these actions directly using tools, instead of just explaining t
 - toggle_staff: enables or disables an existing staff account.
 - create_payment_link: generates a shareable payment link for a subscriber, optionally for a specific goal.
 - send_whatsapp_reminders: sends bulk WhatsApp payment reminders, either to everyone with a pending due or for one specific goal.
+- download_receipt: re-downloads the receipt PDF for a subscriber's already-recorded payment on a goal.
 - report_query: answers a read-only question from data already loaded (totals, dues, counts, plan info) — never a write.
 
 Rules for each tool:
@@ -86,6 +87,7 @@ Rules for each tool:
 - toggle_staff: needs the staff member's name and whether to enable or disable them.
 - create_payment_link: needs a subscriber name; goalName is optional (omit if the user didn't mention a specific goal).
 - send_whatsapp_reminders: goalName is optional — omit it entirely to mean "everyone with a pending due" (the app's own "remind all" convention); include it only if the user named a specific goal.
+- download_receipt: needs a subscriber name and a goal name — this only re-downloads a receipt for a payment that was already recorded, never creates one.
 - report_query: needs a metric — one of: total_collected (optionally scoped to "month"), pending_subscribers, subscriber_due (needs subscriberName), active_goals, subscriber_count, current_plan. Pick the metric that matches what the user asked; never guess a subscriber name for subscriber_due.
 - Never guess a name, amount, or category the user didn't say — ask a short clarifying question in plain text instead of calling a tool with incomplete information (except raise_ticket's category, which may default to "other").
 
@@ -361,6 +363,18 @@ const TOOLS = [
       properties: {
         goalName: { type: 'string', description: 'Optional — omit entirely to mean "everyone with a pending due".' }
       }
+    }
+  },
+  {
+    name: 'download_receipt',
+    description: "Re-download the receipt PDF for a subscriber's already-recorded payment on a goal. Never creates a new payment.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        subscriberName: { type: 'string', description: "The subscriber's name or mobile number." },
+        goalName: { type: 'string', description: 'The goal this payment was recorded against.' }
+      },
+      required: ['subscriberName', 'goalName']
     }
   },
   {

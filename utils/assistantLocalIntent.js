@@ -1008,7 +1008,13 @@ function parseToggleStaff(msg, history) {
 // actual gateway-connected check happens server-side when the frontend
 // calls /pro/create-payment-link — this flow just gathers who/what.
 const PAYMENT_LINK_CONFIRM_RE = /are you saying you'd like to generate a payment link/i;
-const PAYMENT_LINK_WHO_RE = /^great — who should the payment link be for\?$/i;
+// Two different questions dovetail into this same step: the flow's own
+// direct trigger ("who should the payment link be for?") and the collect
+// fallback menu's option 1, worded around a mobile lookup instead — kept
+// textually distinct from DOWNLOAD_RECEIPT_MOBILE_RE below (also a "what's
+// the subscriber's mobile number" question) so FLOW_OWNERS never confuses
+// which flow a reply belongs to.
+const PAYMENT_LINK_WHO_RE = /^great — (?:who should the payment link be for|what's the subscriber's mobile number so i can look up their due and generate the link)\?$/i;
 PENDING_FLOW_MARKERS.push(PAYMENT_LINK_CONFIRM_RE, PAYMENT_LINK_WHO_RE);
 
 const PAYMENT_LINK_FAKE_GOAL_RE = /^(?:his|her|their|its)\s+(?:due|dues|payment|account)s?$/i;
@@ -1094,6 +1100,36 @@ function parseSendWhatsappReminders(msg, history) {
 
   if (!HOW_TO_RE.test(msg) && /\bwhatsapp\b/i.test(msg) && /\breminders?\b/i.test(msg)) {
     return { reply: 'Are you saying you\'d like to send WhatsApp reminders?', handled: true };
+  }
+
+  return null;
+}
+
+// Steps: mobile number -> goal name -> done. Only ever entered via the
+// collect fallback menu's option 2 below (no standalone keyword trigger of
+// its own) — "download the receipt" alone is too generic a phrase to guess
+// at reliably, whereas the menu already established the user meant this.
+const DOWNLOAD_RECEIPT_MOBILE_RE = /^great — what's the subscriber's mobile number so i can find their receipt\?$/i;
+const DOWNLOAD_RECEIPT_GOAL_RE = /^what's the goal name for (.+?)'s receipt\?$/i;
+PENDING_FLOW_MARKERS.push(DOWNLOAD_RECEIPT_MOBILE_RE, DOWNLOAD_RECEIPT_GOAL_RE);
+
+function parseDownloadReceipt(msg, history) {
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 2: answering "what's the goal name for <mobile>'s receipt?"
+  if (lastAssistant && DOWNLOAD_RECEIPT_GOAL_RE.test(lastAssistant.content)) {
+    const [, subscriberName] = lastAssistant.content.match(DOWNLOAD_RECEIPT_GOAL_RE);
+    const goalName = msg.replace(/[.?!]+$/, '').trim();
+    if (!goalName) return { reply: `What's the goal name for ${subscriberName}'s receipt?`, handled: true };
+    return { reply: 'Here\'s what I understood:', action: { type: 'download_receipt', params: { subscriberName, goalName } }, handled: true };
+  }
+
+  // Step 1: answering "what's the subscriber's mobile number...?"
+  if (lastAssistant && DOWNLOAD_RECEIPT_MOBILE_RE.test(lastAssistant.content)) {
+    const mobileMatch = msg.match(/\b(\d{6,15})\b/);
+    const subscriberName = mobileMatch ? mobileMatch[1] : msg.replace(/[.?!]+$/, '').trim();
+    if (!subscriberName) return { reply: 'What\'s the subscriber\'s mobile number?', handled: true };
+    return { reply: `What's the goal name for ${subscriberName}'s receipt?`, handled: true };
   }
 
   return null;
@@ -1327,6 +1363,62 @@ function parseGoalFallbackMenu(msg, history) {
 }
 
 // ---------------------------------------------------------------
+// COLLECT FALLBACK MENU — same last-resort pattern as the goal menu above,
+// keyed on "collect" instead of "goal". Option 1 hands off into the
+// existing create_payment_link flow (via PAYMENT_LINK_WHO_RE, broadened
+// above to also match this menu's own step-2 wording) rather than
+// recording a cash collection — the user's own spec for this option ends
+// with "generate the link", which is what that flow already does; the
+// "displays the total dues" part of the spec is already satisfied by the
+// existing confirmation card (shown by the frontend before Confirm is
+// clicked), not by anything the backend needs to compute itself.
+// ---------------------------------------------------------------
+const COLLECT_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do regarding a payment. Please choose one:\n1. Collect payment (generate a payment link)\n2. Download the receipt\n3. Delete the payment/receipt\n4. How to pay the amount\n5. Something else — I\'ll pass this to the AI';
+const COLLECT_MENU_RE = /^i'm not quite sure what you'd like to do regarding a payment\. please choose one:/i;
+PENDING_FLOW_MARKERS.push(COLLECT_MENU_RE);
+
+const COLLECT_MENU_HOWTO_REPLY = 'Open the relevant goal or subscriber (or the Pending tab) -> "Collect Payment" -> enter the amount -> Save. Or just say "collect 500 from <name> for <goal>" and I\'ll do it for you.';
+
+function parseCollectFallbackMenu(msg, history) {
+  const safeHistory = Array.isArray(history) ? history : [];
+  const lastAssistant = [...safeHistory].reverse().find(h => h.role === 'assistant');
+
+  if (lastAssistant && COLLECT_MENU_RE.test(lastAssistant.content)) {
+    const choice = msg.trim().toLowerCase();
+
+    // Delete checked first — "delete the receipt" would otherwise also
+    // match option 2's bare /receipt/ keyword below.
+    if (/^3\b/.test(choice) || /\bdelete\b/i.test(choice)) {
+      return handleDeleteIntent('delete payment');
+    }
+    if (/^1\b/.test(choice) || /\bcollect\b/i.test(choice)) {
+      return { reply: 'Great — what\'s the subscriber\'s mobile number so I can look up their due and generate the link?', handled: true };
+    }
+    if (/^2\b/.test(choice) || /\breceipt\b|\bdownload\b/i.test(choice)) {
+      return { reply: 'Great — what\'s the subscriber\'s mobile number so I can find their receipt?', handled: true };
+    }
+    if (/^4\b/.test(choice) || /\bhow\b/i.test(choice)) {
+      return { reply: COLLECT_MENU_HOWTO_REPLY, handled: true };
+    }
+    if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
+      const menuIndex = safeHistory.indexOf(lastAssistant);
+      const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
+      const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
+      return { reply: '', handled: false, escalateMessage };
+    }
+
+    // Unrecognized reply to the menu — re-ask rather than guess.
+    return { reply: COLLECT_MENU_QUESTION, handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\bcollect(?:ed|ing)?\b/i.test(msg)) {
+    return { reply: COLLECT_MENU_QUESTION, handled: true };
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------
 // FLOW OWNERSHIP — every confirm-first flow's fast-path check runs
 // unconditionally at the top of its own function, which is fine on a
 // fresh message but dangerous mid-flow: a reply meant as step 2 of one
@@ -1356,7 +1448,9 @@ const FLOW_OWNERS = [
   { markers: [TOGGLE_STAFF_CONFIRM_RE, TOGGLE_STAFF_WHICH_RE], fn: parseToggleStaff },
   { markers: [PAYMENT_LINK_CONFIRM_RE, PAYMENT_LINK_WHO_RE], fn: parseCreatePaymentLink },
   { markers: [WHATSAPP_BULK_CONFIRM_RE, WHATSAPP_BULK_WHICH_RE], fn: parseSendWhatsappReminders },
-  { markers: [GOAL_MENU_RE], fn: parseGoalFallbackMenu }
+  { markers: [DOWNLOAD_RECEIPT_MOBILE_RE, DOWNLOAD_RECEIPT_GOAL_RE], fn: parseDownloadReceipt },
+  { markers: [GOAL_MENU_RE], fn: parseGoalFallbackMenu },
+  { markers: [COLLECT_MENU_RE], fn: parseCollectFallbackMenu }
 ];
 
 function parseLocalIntent(message, history) {
@@ -1452,6 +1546,9 @@ function parseLocalIntent(message, history) {
   const createPaymentLinkResult = parseCreatePaymentLink(msg, safeHistory);
   if (createPaymentLinkResult) return createPaymentLinkResult;
 
+  const downloadReceiptResult = parseDownloadReceipt(msg, safeHistory);
+  if (downloadReceiptResult) return downloadReceiptResult;
+
   const whatsappRemindersResult = parseSendWhatsappReminders(msg, safeHistory);
   if (whatsappRemindersResult) return whatsappRemindersResult;
 
@@ -1480,6 +1577,11 @@ function parseLocalIntent(message, history) {
   // comment above parseGoalFallbackMenu for why this runs before the FAQ.
   const goalMenuResult = parseGoalFallbackMenu(msg, safeHistory);
   if (goalMenuResult) return goalMenuResult;
+
+  // Same last-resort placement, keyed on "collect" — see the comment above
+  // parseCollectFallbackMenu.
+  const collectMenuResult = parseCollectFallbackMenu(msg, safeHistory);
+  if (collectMenuResult) return collectMenuResult;
 
   const faqHit = FAQ.find(item => item.test.test(msg));
   if (faqHit) return { reply: faqHit.reply, handled: true };
