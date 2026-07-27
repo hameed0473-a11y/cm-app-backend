@@ -1486,6 +1486,22 @@ const ROOT_MENU_QUESTION = 'Hi, welcome to Afleen — your AI assistant! 👋\nP
 const ROOT_MENU_RE = /please pick a section below, or just type what you need:/i;
 PENDING_FLOW_MARKERS.push(ROOT_MENU_RE);
 
+// Shared between parseRootMenu (a menu pick) and parseBareNumberLookup
+// below (a bare number typed with no menu actually showing) — both need
+// to resolve "which root-menu option is this" to the exact same result.
+const ROOT_OPTION_LABELS = { 1: 'Goals', 2: 'Subscribers', 3: 'Pending/Missed', 4: 'Accounting', 5: 'Any other' };
+
+function rootOptionResult(num) {
+  switch (num) {
+    case 1: return { reply: GOAL_MENU_QUESTION, handled: true };
+    case 2: return { reply: SUBSCRIBER_MENU_QUESTION, handled: true };
+    case 3: return { reply: `Opening Pending for you.\n\n${ROOT_MENU_QUESTION}`, action: { type: 'view_pending', params: {} }, handled: true };
+    case 4: return { reply: ACCOUNTING_MENU_QUESTION, handled: true };
+    case 5: return { reply: ANY_OTHER_ASK_TEXT, handled: true };
+    default: return null;
+  }
+}
+
 function parseRootMenu(msg, history) {
   const safeHistory = Array.isArray(history) ? history : [];
   const lastAssistant = [...safeHistory].reverse().find(h => h.role === 'assistant');
@@ -1493,26 +1509,46 @@ function parseRootMenu(msg, history) {
 
   const choice = msg.trim().toLowerCase();
 
-  if (/^1\b/.test(choice) || /\bgoals?\b/i.test(choice)) {
-    return { reply: GOAL_MENU_QUESTION, handled: true };
-  }
-  if (/^2\b/.test(choice) || /\bsubscribers?\b/i.test(choice)) {
-    return { reply: SUBSCRIBER_MENU_QUESTION, handled: true };
-  }
-  if (/^3\b/.test(choice) || /\bpending\b|\bmissed\b/i.test(choice)) {
-    return { reply: `Opening Pending for you.\n\n${ROOT_MENU_QUESTION}`, action: { type: 'view_pending', params: {} }, handled: true };
-  }
-
-  if (/^4\b/.test(choice) || /\baccounting\b|\baccounts?\b/i.test(choice)) {
-    return { reply: ACCOUNTING_MENU_QUESTION, handled: true };
-  }
-
-  if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
-    return { reply: ANY_OTHER_ASK_TEXT, handled: true };
-  }
+  if (/^1\b/.test(choice) || /\bgoals?\b/i.test(choice)) return rootOptionResult(1);
+  if (/^2\b/.test(choice) || /\bsubscribers?\b/i.test(choice)) return rootOptionResult(2);
+  if (/^3\b/.test(choice) || /\bpending\b|\bmissed\b/i.test(choice)) return rootOptionResult(3);
+  if (/^4\b/.test(choice) || /\baccounting\b|\baccounts?\b/i.test(choice)) return rootOptionResult(4);
+  if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) return rootOptionResult(5);
 
   // Unrecognized reply to the menu — re-ask rather than guess.
   return { reply: ROOT_MENU_QUESTION, handled: true };
+}
+
+// ---------------------------------------------------------------
+// BARE NUMBER LOOKUP — a lone digit ("4") typed with NO menu actually
+// pending (reaching this point at all already proves that — see the
+// bare-cancel-word comment above). Rather than either guessing it means
+// a root-menu pick or escalating a meaningless single digit to Claude,
+// confirm which section it might mean first. If confirmed (yes), jump
+// straight into that section's own menu, exactly as picking it from the
+// root menu would. If not confirmed, this returns null and normal
+// dispatch continues — which naturally ends in escalating to Claude if
+// nothing else recognizes the message either, per "if uncertain, forward
+// to Claude."
+// ---------------------------------------------------------------
+const BARE_NUMBER_CONFIRM_RE = /^are you saying you'd like to open option (\d+) — (.+?)\?$/i;
+PENDING_FLOW_MARKERS.push(BARE_NUMBER_CONFIRM_RE);
+
+function parseBareNumberLookup(msg, history) {
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  if (lastAssistant && BARE_NUMBER_CONFIRM_RE.test(lastAssistant.content)) {
+    if (!AFFIRMATIVE_RE.test(msg)) return null;
+    const [, numStr] = lastAssistant.content.match(BARE_NUMBER_CONFIRM_RE);
+    return rootOptionResult(Number(numStr));
+  }
+
+  const bareMatch = msg.trim().match(/^([1-5])$/);
+  if (bareMatch && ROOT_OPTION_LABELS[bareMatch[1]]) {
+    return { reply: `Are you saying you'd like to open option ${bareMatch[1]} — ${ROOT_OPTION_LABELS[bareMatch[1]]}?`, handled: true };
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------
@@ -1721,7 +1757,8 @@ const FLOW_OWNERS = [
   { markers: [SUBSCRIBER_MENU_RE], fn: parseSubscriberFallbackMenu },
   { markers: [ACCOUNTING_MENU_RE], fn: parseAccountingFallbackMenu },
   { markers: [ROOT_MENU_RE], fn: parseRootMenu },
-  { markers: [ANY_OTHER_ASK_RE], fn: parseAnyOtherLookup }
+  { markers: [ANY_OTHER_ASK_RE], fn: parseAnyOtherLookup },
+  { markers: [BARE_NUMBER_CONFIRM_RE], fn: parseBareNumberLookup }
 ];
 
 function parseLocalIntent(message, history) {
@@ -1764,6 +1801,12 @@ function parseLocalIntent(message, history) {
   if (GREETING_RE.test(msg)) {
     return { reply: 'Hi! What would you like to do — name a sidebar section (e.g. "goal", "subscriber", "expense") or just tell me directly.', handled: true };
   }
+
+  // Same reasoning, for a bare number ("4") typed with nothing pending —
+  // confirm which root-menu section it might mean rather than escalating
+  // a meaningless digit or guessing outright. See parseBareNumberLookup.
+  const bareNumberResult = parseBareNumberLookup(msg, safeHistory);
+  if (bareNumberResult) return bareNumberResult;
 
   if (/\b(delete|remove|unsubscribe|cancel)\b/i.test(msg) && !(/\bpayee\b/i.test(msg) && /\bcategor/i.test(msg))) {
     return handleDeleteIntent(msg);
