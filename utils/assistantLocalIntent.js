@@ -1393,14 +1393,74 @@ function parseGoalFallbackMenu(msg, history) {
 }
 
 // ---------------------------------------------------------------
+// ACCOUNTING MENU — same menu-first pattern as Goals/Subscribers. All
+// five report options here are read-only (no writes, so no confirmation
+// needed) and none of them make sense as a free-text Claude tool — a
+// treasurer isn't going to naturally phrase "download the day-wise
+// ledger" in conversation, they'll pick it from this menu — so none of
+// these are added to Claude's tool schema either (see routes/web/
+// assistant.js), keeping the system prompt from growing for menu-only
+// actions, same reasoning as view_goals/view_pending.
+// ---------------------------------------------------------------
+const ACCOUNTING_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do in Accounting. Please choose one:\n1. View Total Amount Collected\n2. Download Total Collected — Day-wise\n3. Download Total Collected — Goal-wise\n4. List of Pending & Paid\n5. Insights (charts & report)\n6. Any other — I\'ll pass this to the AI';
+const ACCOUNTING_MENU_RE = /i'm not quite sure what you'd like to do in accounting\. please choose one:/i;
+PENDING_FLOW_MARKERS.push(ACCOUNTING_MENU_RE);
+
+function parseAccountingFallbackMenu(msg, history) {
+  const safeHistory = Array.isArray(history) ? history : [];
+  const lastAssistant = [...safeHistory].reverse().find(h => h.role === 'assistant');
+
+  if (lastAssistant && ACCOUNTING_MENU_RE.test(lastAssistant.content)) {
+    const choice = msg.trim().toLowerCase();
+
+    // All options here are terminal (read-only reports/navigation, no
+    // multi-step flow to hand off into) — the menu is re-appended after
+    // each so the next pick still has the menu question to match against.
+    // Option 1 doesn't re-append the menu the way the others do — its
+    // actual answer is computed client-side from real account data (see
+    // buildReportQueryReply in AIAssistant.tsx) and pushed as a separate
+    // message after this reply, so putting the menu text here would show
+    // it BEFORE the answer instead of after.
+    if (/^1\b/.test(choice) || /\btotal\b/i.test(choice)) {
+      return { reply: '', action: { type: 'report_query', params: { metric: 'total_collected' } }, handled: true };
+    }
+    if (/^2\b/.test(choice) || /\bday\b|\bdaywise\b/i.test(choice)) {
+      return { reply: `Downloading your day-wise ledger.\n\n${ACCOUNTING_MENU_QUESTION}`, action: { type: 'download_daywise_ledger', params: {} }, handled: true };
+    }
+    if (/^3\b/.test(choice) || /\bgoal\b|\bgoalwise\b/i.test(choice)) {
+      return { reply: `Downloading your goal-wise ledger.\n\n${ACCOUNTING_MENU_QUESTION}`, action: { type: 'download_goalwise_ledger', params: {} }, handled: true };
+    }
+    if (/^4\b/.test(choice) || /\bpending\b|\bpaid\b/i.test(choice)) {
+      return { reply: `Here are your active goals — pick one for the pending & paid report.\n\n${ACCOUNTING_MENU_QUESTION}`, action: { type: 'list_goals_for_report', params: {} }, handled: true };
+    }
+    if (/^5\b/.test(choice) || /\binsights?\b/i.test(choice)) {
+      return { reply: `Generating your insights report.\n\n${ACCOUNTING_MENU_QUESTION}`, action: { type: 'download_insights_report', params: {} }, handled: true };
+    }
+    if (/^6\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
+      const menuIndex = safeHistory.indexOf(lastAssistant);
+      const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
+      const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
+      return { reply: '', handled: false, escalateMessage };
+    }
+
+    // Unrecognized reply to the menu — re-ask rather than guess.
+    return { reply: ACCOUNTING_MENU_QUESTION, handled: true };
+  }
+
+  if (!HOW_TO_RE.test(msg) && /\baccounting\b|\baccounts?\b/i.test(msg)) {
+    return { reply: ACCOUNTING_MENU_QUESTION, handled: true };
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------
 // ROOT MENU — the assistant's default entry point (shown by the frontend
 // itself as the opening greeting, no backend call involved in displaying
 // it — see AIAssistant.tsx). This only ever needs to handle the REPLY to
 // that greeting: picking a sidebar section hands off into that section's
-// own menu (Goals/Subscribers already exist; Pending is simple enough to
-// be a direct navigation with no submenu of its own; anything not built
-// yet, like Accounting, escalates to Claude for now same as "any other" —
-// a placeholder until it gets the same menu treatment).
+// own menu (Goals/Subscribers/Accounting already exist; Pending is simple
+// enough to be a direct navigation with no submenu of its own).
 //
 // Typed shortcuts (e.g. typing "create a goal" directly) keep working
 // exactly as before — this menu is an additional, easier front door, not
@@ -1427,15 +1487,14 @@ function parseRootMenu(msg, history) {
     return { reply: `Opening Pending for you.\n\n${ROOT_MENU_QUESTION}`, action: { type: 'view_pending', params: {} }, handled: true };
   }
 
+  if (/^4\b/.test(choice) || /\baccounting\b|\baccounts?\b/i.test(choice)) {
+    return { reply: ACCOUNTING_MENU_QUESTION, handled: true };
+  }
+
   const menuIndex = safeHistory.indexOf(lastAssistant);
   const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
   const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
 
-  // Accounting doesn't have its own menu yet — escalate for now, same as
-  // "any other", until it gets the same menu treatment as Goals/Subscribers.
-  if (/^4\b/.test(choice) || /\baccounting\b|\baccounts?\b/i.test(choice)) {
-    return { reply: '', handled: false, escalateMessage };
-  }
   if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
     return { reply: '', handled: false, escalateMessage };
   }
@@ -1654,6 +1713,7 @@ const FLOW_OWNERS = [
   { markers: [COLLECT_MENU_RE], fn: parseCollectFallbackMenu },
   { markers: [EDIT_DETAILS_NAME_MOBILE_RE, EDIT_DETAILS_WHAT_RE], fn: parseEditSubscriberDetailsLookup },
   { markers: [SUBSCRIBER_MENU_RE], fn: parseSubscriberFallbackMenu },
+  { markers: [ACCOUNTING_MENU_RE], fn: parseAccountingFallbackMenu },
   { markers: [ROOT_MENU_RE], fn: parseRootMenu }
 ];
 
@@ -1791,6 +1851,11 @@ function parseLocalIntent(message, history) {
   // the comment above parseSubscriberFallbackMenu.
   const subscriberMenuResult = parseSubscriberFallbackMenu(msg, safeHistory);
   if (subscriberMenuResult) return subscriberMenuResult;
+
+  // Same last-resort placement, keyed on "accounting"/"accounts" — see the
+  // comment above parseAccountingFallbackMenu.
+  const accountingMenuResult = parseAccountingFallbackMenu(msg, safeHistory);
+  if (accountingMenuResult) return accountingMenuResult;
 
   const faqHit = FAQ.find(item => item.test.test(msg));
   if (faqHit) return { reply: faqHit.reply, handled: true };
