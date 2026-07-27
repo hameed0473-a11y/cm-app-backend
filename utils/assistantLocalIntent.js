@@ -1301,29 +1301,44 @@ const FAQ = [
 const FALLBACK_REPLY = 'Test mode (no AI key set yet): I can currently handle creating goals, collecting payments, adding/editing subscribers, subscribing someone to a goal, creating a pledge, marking a goal complete, stopping a goal\'s rollover, adding an expense/payee, raising or reopening a support ticket, changing your currency, and answering questions like "how much have I collected", "who\'s pending", "what does X owe", "list my active goals", "how many subscribers do I have", and "when does my subscription renew" — plus basic how-to questions. Add ANTHROPIC_API_KEY on the backend to unlock full understanding.';
 
 // ---------------------------------------------------------------
-// GOAL FALLBACK MENU — pilot for a "don't guess, offer a menu" last-resort
-// step, tried only after every specific goal-related flow above has
-// already had its shot at the message and come up empty. A message that
-// mentions "goal" but doesn't cleanly match create/subscribe/pledge/
-// complete/rollover is far more likely to be one of a few common intents
-// than genuinely novel — so this asks which one, instead of either
-// guessing (the old behavior: the FAQ's /goal/i entry below would answer
-// "how to create a goal" for literally anything mentioning "goal") or
-// spending a Claude call on it. A plain "how do I ...?" question still
-// skips this and goes straight to the FAQ's explanation, same as before.
+// GOALS MENU — menu-first navigation for the Goals section (see the
+// ROOT MENU below for the top-level entry point). Tried as a last resort
+// after every specific goal-related flow above has already had its shot
+// at a bare "goal" mention, and reached directly when the root menu's
+// "Goals" option is picked. A message that mentions "goal" but doesn't
+// cleanly match create/subscribe/pledge/complete/rollover is far more
+// likely to be one of these common intents than genuinely novel — so
+// this asks which one, instead of either guessing or spending a Claude
+// call on it. A plain "how do I ...?" question still skips this and goes
+// straight to the FAQ's explanation, same as before.
 //
-// Option 5 ("something else") is the only path that still reaches Claude
-// — and it must send Claude the user's ORIGINAL question, not their menu
-// reply ("5" or "not covered" means nothing to Claude on its own). That's
+// Option 8 ("any other") is the only path that still reaches Claude — and
+// it must send Claude the user's ORIGINAL question, not their menu reply
+// ("8" or "not covered" means nothing to Claude on its own). That's
 // carried via the escalateMessage field on the returned result, recovered
 // from the history turn immediately before this menu was asked.
 // ---------------------------------------------------------------
-const GOAL_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a goal. Please choose one:\n1. Create a goal\n2. Delete a goal\n3. Add/remove subscribers on a goal\n4. How to add a goal (steps)\n5. Something else — I\'ll pass this to the AI';
+const GOAL_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a goal. Please choose one:\n1. Create a Goal\n2. View Goals\n3. List of Pending Subscribers\n4. Delete a Goal\n5. Mark Goal as Complete\n6. Stop Rollover the Goal\n7. Download Receipt\n8. Any other — I\'ll pass this to the AI';
 const GOAL_MENU_RE = /i'm not quite sure what you'd like to do with a goal\. please choose one:/i;
 PENDING_FLOW_MARKERS.push(GOAL_MENU_RE);
 
-const GOAL_MENU_SUBSCRIBER_STEPS_REPLY = 'I can\'t add or remove subscribers on a goal through this menu — please say "add a subscriber" or "subscribe <name> to <goal>" directly, or use Sidebar -> Subscribers / open the goal itself.';
-const GOAL_MENU_HOWTO_REPLY = 'Sidebar -> "Goals and Pledges" -> "New Goal" (monthly/yearly) or "New Pledge Goal" (one-off) -> enter a name and optional target -> Create. Or just say "create a goal named ..." and I\'ll do it for you.';
+const GOALS_LIST_RECEIPTS_WHO_RE = /^great — what's the subscriber's name or mobile number, so i can list their receipts\?$/i;
+PENDING_FLOW_MARKERS.push(GOALS_LIST_RECEIPTS_WHO_RE);
+
+// Owned only by the Goals menu's "Download Receipt" option — no standalone
+// keyword trigger of its own, same reasoning as parseDownloadReceipt above.
+// Unlike parseDownloadReceipt (which needs a goal name too, for a single
+// receipt), this only needs the subscriber — the frontend lists every goal
+// they have a receipt for and the user picks which one to download.
+function parseListReceiptsLookup(msg, history) {
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+  if (!(lastAssistant && GOALS_LIST_RECEIPTS_WHO_RE.test(lastAssistant.content))) return null;
+
+  const mobileMatch = msg.match(/\b(\d{6,15})\b/);
+  const subscriberName = mobileMatch ? mobileMatch[1] : msg.replace(/[.?!]+$/, '').trim();
+  if (!subscriberName) return { reply: 'What\'s the subscriber\'s name or mobile number?', handled: true };
+  return { reply: 'Here\'s what I understood:', action: { type: 'list_receipts_for_subscriber', params: { subscriberName } }, handled: true };
+}
 
 function parseGoalFallbackMenu(msg, history) {
   const safeHistory = Array.isArray(history) ? history : [];
@@ -1335,21 +1350,31 @@ function parseGoalFallbackMenu(msg, history) {
     if (/^1\b/.test(choice) || (/\bcreate\b/i.test(choice) && !/\bdelete\b/i.test(choice))) {
       return { reply: 'Great — what should the goal be named?', handled: true };
     }
-    // Options 2-4 are terminal (no further flow to hand off into) — the
-    // menu is re-appended after each so the next reply ("2", "4", etc.)
-    // still has the menu question as the last assistant turn to match
-    // against, instead of falling through to Claude with nothing to go on.
-    if (/^2\b/.test(choice) || /\bdelete\b/i.test(choice)) {
+    // Options 2-4 and 7 are terminal or hand off elsewhere without looping
+    // back automatically on their own — the menu is re-appended after each
+    // terminal reply so the next pick ("4", "6", etc.) still has the menu
+    // question as the last assistant turn to match against, instead of
+    // falling through to Claude with nothing to go on.
+    if (/^2\b/.test(choice) || /\bview\b/i.test(choice)) {
+      return { reply: `Opening Goals for you.\n\n${GOAL_MENU_QUESTION}`, action: { type: 'view_goals', params: {} }, handled: true };
+    }
+    if (/^3\b/.test(choice) || /\bpending\b|\bmissed\b/i.test(choice)) {
+      return { reply: `Opening Pending for you.\n\n${GOAL_MENU_QUESTION}`, action: { type: 'view_pending', params: {} }, handled: true };
+    }
+    if (/^4\b/.test(choice) || /\bdelete\b/i.test(choice)) {
       const deleteResult = handleDeleteIntent('delete goal');
       return { reply: `${deleteResult.reply}\n\n${GOAL_MENU_QUESTION}`, handled: true };
     }
-    if (/^3\b/.test(choice) || /\b(subscriber|subscribe|unsubscribe)\b/i.test(choice)) {
-      return { reply: `${GOAL_MENU_SUBSCRIBER_STEPS_REPLY}\n\n${GOAL_MENU_QUESTION}`, handled: true };
+    if (/^5\b/.test(choice) || /\bcomplete\b/i.test(choice)) {
+      return { reply: 'Great — which goal should I mark complete?', handled: true };
     }
-    if (/^4\b/.test(choice) || /\bhow\b/i.test(choice)) {
-      return { reply: `${GOAL_MENU_HOWTO_REPLY}\n\n${GOAL_MENU_QUESTION}`, handled: true };
+    if (/^6\b/.test(choice) || /\brollover\b|\brolling over\b/i.test(choice)) {
+      return { reply: 'Great — which goal should I stop from rolling over?', handled: true };
     }
-    if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
+    if (/^7\b/.test(choice) || /\breceipt\b|\bdownload\b/i.test(choice)) {
+      return { reply: 'Great — what\'s the subscriber\'s name or mobile number, so I can list their receipts?', handled: true };
+    }
+    if (/^8\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
       const menuIndex = safeHistory.indexOf(lastAssistant);
       const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
       const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
@@ -1365,6 +1390,58 @@ function parseGoalFallbackMenu(msg, history) {
   }
 
   return null;
+}
+
+// ---------------------------------------------------------------
+// ROOT MENU — the assistant's default entry point (shown by the frontend
+// itself as the opening greeting, no backend call involved in displaying
+// it — see AIAssistant.tsx). This only ever needs to handle the REPLY to
+// that greeting: picking a sidebar section hands off into that section's
+// own menu (Goals/Subscribers already exist; Pending is simple enough to
+// be a direct navigation with no submenu of its own; anything not built
+// yet, like Accounting, escalates to Claude for now same as "any other" —
+// a placeholder until it gets the same menu treatment).
+//
+// Typed shortcuts (e.g. typing "create a goal" directly) keep working
+// exactly as before — this menu is an additional, easier front door, not
+// a replacement requirement.
+// ---------------------------------------------------------------
+const ROOT_MENU_QUESTION = 'Hi, welcome to Afleen — your AI assistant! 👋\nPlease pick a section below, or just type what you need:\n1. Goals\n2. Subscribers\n3. Pending/Missed\n4. Accounting\n5. Any other — I\'ll pass this to the AI';
+const ROOT_MENU_RE = /please pick a section below, or just type what you need:/i;
+PENDING_FLOW_MARKERS.push(ROOT_MENU_RE);
+
+function parseRootMenu(msg, history) {
+  const safeHistory = Array.isArray(history) ? history : [];
+  const lastAssistant = [...safeHistory].reverse().find(h => h.role === 'assistant');
+  if (!(lastAssistant && ROOT_MENU_RE.test(lastAssistant.content))) return null;
+
+  const choice = msg.trim().toLowerCase();
+
+  if (/^1\b/.test(choice) || /\bgoals?\b/i.test(choice)) {
+    return { reply: GOAL_MENU_QUESTION, handled: true };
+  }
+  if (/^2\b/.test(choice) || /\bsubscribers?\b/i.test(choice)) {
+    return { reply: SUBSCRIBER_MENU_QUESTION, handled: true };
+  }
+  if (/^3\b/.test(choice) || /\bpending\b|\bmissed\b/i.test(choice)) {
+    return { reply: `Opening Pending for you.\n\n${ROOT_MENU_QUESTION}`, action: { type: 'view_pending', params: {} }, handled: true };
+  }
+
+  const menuIndex = safeHistory.indexOf(lastAssistant);
+  const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
+  const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
+
+  // Accounting doesn't have its own menu yet — escalate for now, same as
+  // "any other", until it gets the same menu treatment as Goals/Subscribers.
+  if (/^4\b/.test(choice) || /\baccounting\b|\baccounts?\b/i.test(choice)) {
+    return { reply: '', handled: false, escalateMessage };
+  }
+  if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
+    return { reply: '', handled: false, escalateMessage };
+  }
+
+  // Unrecognized reply to the menu — re-ask rather than guess.
+  return { reply: ROOT_MENU_QUESTION, handled: true };
 }
 
 // ---------------------------------------------------------------
@@ -1572,10 +1649,12 @@ const FLOW_OWNERS = [
   { markers: [PAYMENT_LINK_CONFIRM_RE, PAYMENT_LINK_WHO_RE], fn: parseCreatePaymentLink },
   { markers: [WHATSAPP_BULK_CONFIRM_RE, WHATSAPP_BULK_WHICH_RE], fn: parseSendWhatsappReminders },
   { markers: [DOWNLOAD_RECEIPT_MOBILE_RE, DOWNLOAD_RECEIPT_GOAL_RE], fn: parseDownloadReceipt },
+  { markers: [GOALS_LIST_RECEIPTS_WHO_RE], fn: parseListReceiptsLookup },
   { markers: [GOAL_MENU_RE], fn: parseGoalFallbackMenu },
   { markers: [COLLECT_MENU_RE], fn: parseCollectFallbackMenu },
   { markers: [EDIT_DETAILS_NAME_MOBILE_RE, EDIT_DETAILS_WHAT_RE], fn: parseEditSubscriberDetailsLookup },
-  { markers: [SUBSCRIBER_MENU_RE], fn: parseSubscriberFallbackMenu }
+  { markers: [SUBSCRIBER_MENU_RE], fn: parseSubscriberFallbackMenu },
+  { markers: [ROOT_MENU_RE], fn: parseRootMenu }
 ];
 
 function parseLocalIntent(message, history) {
