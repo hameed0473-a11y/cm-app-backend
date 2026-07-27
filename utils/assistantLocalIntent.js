@@ -1301,6 +1301,29 @@ const FAQ = [
 const FALLBACK_REPLY = 'Test mode (no AI key set yet): I can currently handle creating goals, collecting payments, adding/editing subscribers, subscribing someone to a goal, creating a pledge, marking a goal complete, stopping a goal\'s rollover, adding an expense/payee, raising or reopening a support ticket, changing your currency, and answering questions like "how much have I collected", "who\'s pending", "what does X owe", "list my active goals", "how many subscribers do I have", and "when does my subscription renew" — plus basic how-to questions. Add ANTHROPIC_API_KEY on the backend to unlock full understanding.';
 
 // ---------------------------------------------------------------
+// "ANY OTHER" LOOKUP — shared last step for every menu's final option
+// (Goals/Collect/Subscriber/Accounting/Root). Picking that option no
+// longer escalates immediately with whatever question originally opened
+// the menu — a bare "5" means nothing on its own, and reusing the
+// original question is often stale by the time someone reaches this
+// option after browsing through several picks. Instead it asks the user
+// to actually type what they need, and THAT reply is what gets escalated.
+// One shared marker/handler for all five menus, since the step is
+// identical everywhere.
+// ---------------------------------------------------------------
+const ANY_OTHER_ASK_TEXT = 'Please enter the details of your requirement.';
+const ANY_OTHER_ASK_RE = /^please enter the details of your requirement\.$/i;
+PENDING_FLOW_MARKERS.push(ANY_OTHER_ASK_RE);
+
+function parseAnyOtherLookup(msg, history) {
+  const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+  if (!(lastAssistant && ANY_OTHER_ASK_RE.test(lastAssistant.content))) return null;
+  const trimmed = msg.trim();
+  if (!trimmed) return { reply: ANY_OTHER_ASK_TEXT, handled: true };
+  return { reply: '', handled: false, escalateMessage: trimmed };
+}
+
+// ---------------------------------------------------------------
 // GOALS MENU — menu-first navigation for the Goals section (see the
 // ROOT MENU below for the top-level entry point). Tried as a last resort
 // after every specific goal-related flow above has already had its shot
@@ -1312,13 +1335,12 @@ const FALLBACK_REPLY = 'Test mode (no AI key set yet): I can currently handle cr
 // call on it. A plain "how do I ...?" question still skips this and goes
 // straight to the FAQ's explanation, same as before.
 //
-// Option 8 ("any other") is the only path that still reaches Claude — and
-// it must send Claude the user's ORIGINAL question, not their menu reply
-// ("8" or "not covered" means nothing to Claude on its own). That's
-// carried via the escalateMessage field on the returned result, recovered
-// from the history turn immediately before this menu was asked.
+// Option 8 ("any other") is the only path that still reaches Claude — it
+// asks the user to type their requirement (see parseAnyOtherLookup above)
+// rather than escalating the original menu-triggering question, which by
+// this point may be stale or no longer what they mean.
 // ---------------------------------------------------------------
-const GOAL_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a goal. Please choose one:\n1. Create a Goal\n2. View Goals\n3. List of Pending Subscribers\n4. Delete a Goal\n5. Mark Goal as Complete\n6. Stop Rollover the Goal\n7. Download Receipt\n8. Any other — I\'ll pass this to the AI';
+const GOAL_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a goal. Please choose one:\n1. Create a Goal\n2. View Goals\n3. List of Pending Subscribers\n4. Delete a Goal\n5. Mark Goal as Complete\n6. Stop Rollover the Goal\n7. Download Receipt\n8. Any other';
 const GOAL_MENU_RE = /i'm not quite sure what you'd like to do with a goal\. please choose one:/i;
 PENDING_FLOW_MARKERS.push(GOAL_MENU_RE);
 
@@ -1375,10 +1397,7 @@ function parseGoalFallbackMenu(msg, history) {
       return { reply: 'Great — what\'s the subscriber\'s name or mobile number, so I can list their receipts?', handled: true };
     }
     if (/^8\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
-      const menuIndex = safeHistory.indexOf(lastAssistant);
-      const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
-      const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
-      return { reply: '', handled: false, escalateMessage };
+      return { reply: ANY_OTHER_ASK_TEXT, handled: true };
     }
 
     // Unrecognized reply to the menu — re-ask rather than guess.
@@ -1402,7 +1421,7 @@ function parseGoalFallbackMenu(msg, history) {
 // assistant.js), keeping the system prompt from growing for menu-only
 // actions, same reasoning as view_goals/view_pending.
 // ---------------------------------------------------------------
-const ACCOUNTING_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do in Accounting. Please choose one:\n1. View Total Amount Collected\n2. Download Total Collected — Day-wise\n3. Download Total Collected — Goal-wise\n4. List of Pending & Paid\n5. Insights (charts & report)\n6. Any other — I\'ll pass this to the AI';
+const ACCOUNTING_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do in Accounting. Please choose one:\n1. View Total Amount Collected\n2. Download Total Collected — Day-wise\n3. Download Total Collected — Goal-wise\n4. List of Pending & Paid\n5. Insights (charts & report)\n6. Any other';
 const ACCOUNTING_MENU_RE = /i'm not quite sure what you'd like to do in accounting\. please choose one:/i;
 PENDING_FLOW_MARKERS.push(ACCOUNTING_MENU_RE);
 
@@ -1437,10 +1456,7 @@ function parseAccountingFallbackMenu(msg, history) {
       return { reply: `Generating your insights report.\n\n${ACCOUNTING_MENU_QUESTION}`, action: { type: 'download_insights_report', params: {} }, handled: true };
     }
     if (/^6\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
-      const menuIndex = safeHistory.indexOf(lastAssistant);
-      const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
-      const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
-      return { reply: '', handled: false, escalateMessage };
+      return { reply: ANY_OTHER_ASK_TEXT, handled: true };
     }
 
     // Unrecognized reply to the menu — re-ask rather than guess.
@@ -1466,7 +1482,7 @@ function parseAccountingFallbackMenu(msg, history) {
 // exactly as before — this menu is an additional, easier front door, not
 // a replacement requirement.
 // ---------------------------------------------------------------
-const ROOT_MENU_QUESTION = 'Hi, welcome to Afleen — your AI assistant! 👋\nPlease pick a section below, or just type what you need:\n1. Goals\n2. Subscribers\n3. Pending/Missed\n4. Accounting\n5. Any other — I\'ll pass this to the AI';
+const ROOT_MENU_QUESTION = 'Hi, welcome to Afleen — your AI assistant! 👋\nPlease pick a section below, or just type what you need:\n1. Goals\n2. Subscribers\n3. Pending/Missed\n4. Accounting\n5. Any other';
 const ROOT_MENU_RE = /please pick a section below, or just type what you need:/i;
 PENDING_FLOW_MARKERS.push(ROOT_MENU_RE);
 
@@ -1491,12 +1507,8 @@ function parseRootMenu(msg, history) {
     return { reply: ACCOUNTING_MENU_QUESTION, handled: true };
   }
 
-  const menuIndex = safeHistory.indexOf(lastAssistant);
-  const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
-  const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
-
   if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
-    return { reply: '', handled: false, escalateMessage };
+    return { reply: ANY_OTHER_ASK_TEXT, handled: true };
   }
 
   // Unrecognized reply to the menu — re-ask rather than guess.
@@ -1514,7 +1526,7 @@ function parseRootMenu(msg, history) {
 // existing confirmation card (shown by the frontend before Confirm is
 // clicked), not by anything the backend needs to compute itself.
 // ---------------------------------------------------------------
-const COLLECT_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do regarding a payment. Please choose one:\n1. Collect payment (generate a payment link)\n2. Download the receipt\n3. Delete the payment/receipt\n4. How to pay the amount\n5. Something else — I\'ll pass this to the AI';
+const COLLECT_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do regarding a payment. Please choose one:\n1. Collect payment (generate a payment link)\n2. Download the receipt\n3. Delete the payment/receipt\n4. How to pay the amount\n5. Something else';
 const COLLECT_MENU_RE = /i'm not quite sure what you'd like to do regarding a payment\. please choose one:/i;
 PENDING_FLOW_MARKERS.push(COLLECT_MENU_RE);
 
@@ -1546,10 +1558,7 @@ function parseCollectFallbackMenu(msg, history) {
       return { reply: `${COLLECT_MENU_HOWTO_REPLY}\n\n${COLLECT_MENU_QUESTION}`, handled: true };
     }
     if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
-      const menuIndex = safeHistory.indexOf(lastAssistant);
-      const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
-      const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
-      return { reply: '', handled: false, escalateMessage };
+      return { reply: ANY_OTHER_ASK_TEXT, handled: true };
     }
 
     // Unrecognized reply to the menu — re-ask rather than guess.
@@ -1585,7 +1594,7 @@ function parseCollectFallbackMenu(msg, history) {
 // "not covered above" line — treated here as a 6th option, since escalating
 // to Claude needs its own slot distinct from "edit subscriber details".
 // ---------------------------------------------------------------
-const SUBSCRIBER_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a subscriber. Please choose one:\n1. Add subscriber\n2. View subscriber details\n3. Delete/remove the subscriber\n4. How to add a subscriber\n5. Edit subscriber details\n6. Something else — I\'ll pass this to the AI';
+const SUBSCRIBER_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a subscriber. Please choose one:\n1. Add subscriber\n2. View subscriber details\n3. Delete/remove the subscriber\n4. How to add a subscriber\n5. Edit subscriber details\n6. Something else';
 const SUBSCRIBER_MENU_RE = /i'm not quite sure what you'd like to do with a subscriber\. please choose one:/i;
 PENDING_FLOW_MARKERS.push(SUBSCRIBER_MENU_RE);
 
@@ -1660,10 +1669,7 @@ function parseSubscriberFallbackMenu(msg, history) {
       return { reply: `${SUBSCRIBER_MENU_HOWTO_REPLY}\n\n${SUBSCRIBER_MENU_QUESTION}`, handled: true };
     }
     if (/^6\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
-      const menuIndex = safeHistory.indexOf(lastAssistant);
-      const originalTurn = menuIndex > 0 ? safeHistory[menuIndex - 1] : null;
-      const escalateMessage = originalTurn && originalTurn.role === 'user' ? originalTurn.content : msg;
-      return { reply: '', handled: false, escalateMessage };
+      return { reply: ANY_OTHER_ASK_TEXT, handled: true };
     }
 
     // Unrecognized reply to the menu — re-ask rather than guess.
@@ -1714,7 +1720,8 @@ const FLOW_OWNERS = [
   { markers: [EDIT_DETAILS_NAME_MOBILE_RE, EDIT_DETAILS_WHAT_RE], fn: parseEditSubscriberDetailsLookup },
   { markers: [SUBSCRIBER_MENU_RE], fn: parseSubscriberFallbackMenu },
   { markers: [ACCOUNTING_MENU_RE], fn: parseAccountingFallbackMenu },
-  { markers: [ROOT_MENU_RE], fn: parseRootMenu }
+  { markers: [ROOT_MENU_RE], fn: parseRootMenu },
+  { markers: [ANY_OTHER_ASK_RE], fn: parseAnyOtherLookup }
 ];
 
 function parseLocalIntent(message, history) {
