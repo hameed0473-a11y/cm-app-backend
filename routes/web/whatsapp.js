@@ -40,7 +40,7 @@ function sleep(ms) {
 // Space out consecutive sends and back off on Meta's rate-limit response
 // (HTTP 429 / error subcode 131056) instead of bursting the whole list
 // through in a tight loop, which is what actually trips the throttle.
-const BULK_SEND_DELAY_MS = 300;
+const BULK_SEND_DELAY_MS = 1000;
 const RATE_LIMIT_BACKOFFS_MS = [1000, 2000];
 
 function isRateLimited(status, json) {
