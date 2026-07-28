@@ -33,6 +33,52 @@ function toWhatsAppNumber(mobile) {
   return digits.length === 10 ? `91${digits}` : digits;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Space out consecutive sends and back off on Meta's rate-limit response
+// (HTTP 429 / error subcode 131056) instead of bursting the whole list
+// through in a tight loop, which is what actually trips the throttle.
+const BULK_SEND_DELAY_MS = 300;
+const RATE_LIMIT_BACKOFFS_MS = [1000, 2000];
+
+function isRateLimited(status, json) {
+  if (status === 429) return true;
+  const code = json?.error?.code;
+  const subcode = json?.error?.error_subcode;
+  return code === 130429 || code === 4 || subcode === 131056;
+}
+
+async function sendWhatsAppTemplate(integration, accessToken, toNumber, r) {
+  const resp = await fetch(`https://graph.facebook.com/v19.0/${integration.phone_number_id}/messages`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: toNumber,
+      type: 'template',
+      template: {
+        name: integration.template_name,
+        language: { code: integration.template_language || 'en_US' },
+        components: [{
+          type: 'body',
+          parameters: [
+            { type: 'text', text: String(r.name || '') },
+            { type: 'text', text: String(r.amount || '') },
+            { type: 'text', text: String(r.goalName || '') }
+          ]
+        }]
+      }
+    })
+  });
+  const json = await resp.json().catch(() => ({}));
+  return { resp, json };
+}
+
 // --- Save / update WhatsApp Business API credentials ---
 router.post('/web-save-whatsapp-integration', requireProToken, async (req, res) => {
   const phoneNumberId = String(req.body.phoneNumberId || '').trim();
@@ -147,7 +193,8 @@ router.post('/web-send-whatsapp-bulk', requireProToken, async (req, res) => {
     }
 
     const results = [];
-    for (const r of recipients) {
+    for (let i = 0; i < recipients.length; i++) {
+      const r = recipients[i];
       const toNumber = toWhatsAppNumber(r.mobile);
       if (!toNumber) {
         results.push({ mobile: r.mobile, success: false, error: 'Invalid mobile number' });
@@ -155,31 +202,14 @@ router.post('/web-send-whatsapp-bulk', requireProToken, async (req, res) => {
       }
 
       try {
-        const resp = await fetch(`https://graph.facebook.com/v19.0/${integration.phone_number_id}/messages`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            messaging_product: 'whatsapp',
-            to: toNumber,
-            type: 'template',
-            template: {
-              name: integration.template_name,
-              language: { code: integration.template_language || 'en_US' },
-              components: [{
-                type: 'body',
-                parameters: [
-                  { type: 'text', text: String(r.name || '') },
-                  { type: 'text', text: String(r.amount || '') },
-                  { type: 'text', text: String(r.goalName || '') }
-                ]
-              }]
-            }
-          })
-        });
-        const json = await resp.json().catch(() => ({}));
+        let resp, json;
+        let attempt = 0;
+        while (true) {
+          ({ resp, json } = await sendWhatsAppTemplate(integration, accessToken, toNumber, r));
+          if (resp.ok || !isRateLimited(resp.status, json) || attempt >= RATE_LIMIT_BACKOFFS_MS.length) break;
+          await sleep(RATE_LIMIT_BACKOFFS_MS[attempt]);
+          attempt++;
+        }
         if (!resp.ok) {
           results.push({ mobile: r.mobile, success: false, error: json?.error?.message || `HTTP ${resp.status}` });
         } else {
@@ -188,6 +218,8 @@ router.post('/web-send-whatsapp-bulk', requireProToken, async (req, res) => {
       } catch (sendErr) {
         results.push({ mobile: r.mobile, success: false, error: sendErr?.message || 'Send failed' });
       }
+
+      if (i < recipients.length - 1) await sleep(BULK_SEND_DELAY_MS);
     }
 
     const sentCount = results.filter(r => r.success).length;
