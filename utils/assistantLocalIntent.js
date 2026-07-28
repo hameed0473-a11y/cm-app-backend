@@ -1311,8 +1311,8 @@ const FALLBACK_REPLY = 'Test mode (no AI key set yet): I can currently handle cr
 // One shared marker/handler for all five menus, since the step is
 // identical everywhere.
 // ---------------------------------------------------------------
-const ANY_OTHER_ASK_TEXT = 'Please enter the details of your requirement.';
-const ANY_OTHER_ASK_RE = /^please enter the details of your requirement\.$/i;
+const ANY_OTHER_ASK_TEXT = 'Please enter your requirement below.';
+const ANY_OTHER_ASK_RE = /^please enter your requirement below\.$/i;
 PENDING_FLOW_MARKERS.push(ANY_OTHER_ASK_RE);
 
 function parseAnyOtherLookup(msg, history) {
