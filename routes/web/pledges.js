@@ -20,7 +20,7 @@ const router = express.Router();
 // arrays, so it gets its own array + its own fetch-fresh-then-append write.
 // ---------------------------------------------------------------
 router.post('/web-create-pledge', requireProOrStaffToken, async (req, res) => {
-  const { targetId, name, mobile, promisedAmount, contributorId } = req.body;
+  const { targetId, name, mobile, promisedAmount, contributorId, address } = req.body;
   if (!targetId || !name || !mobile || !promisedAmount) {
     return res.status(400).json({ error: 'targetId, name, mobile, and promisedAmount are required' });
   }
@@ -52,7 +52,8 @@ router.post('/web-create-pledge', requireProOrStaffToken, async (req, res) => {
       amountPaid: 0,
       status: 'pending',
       createdAt: new Date().toISOString(),
-      ...(contributorId ? { contributorId } : {})
+      ...(contributorId ? { contributorId } : {}),
+      ...(address && String(address).trim() ? { address: String(address).trim() } : {})
     };
     pledges.push(newPledge);
 

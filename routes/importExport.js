@@ -154,6 +154,8 @@ router.post('/import-goals', async (req, res) => {
     const contribKey = keys.find(k => { const h = norm(k); return (h.includes('contributor') || h.includes('name of cont')) && !h.includes('mobile'); });
     const mobileKey = keys.find(k => { const h = norm(k); return h.includes('mobile') || h.includes('phone') || h.includes('number'); });
     const amountKey = keys.find(k => norm(k).includes('amount'));
+    // Optional — not required, unlike the four columns above.
+    const addressKey = keys.find(k => norm(k).includes('address'));
 
     if (!goalKey || !contribKey || !amountKey) {
       return res.status(400).json({
@@ -177,6 +179,7 @@ router.post('/import-goals', async (req, res) => {
       const mobile = mobileRaw.replace(/\D/g, '').slice(-10); // digits only, last 10
       const amountRaw = row[amountKey];
       const amount = String(amountRaw ?? '').trim();
+      const address = addressKey ? String(row[addressKey] || '').trim() : '';
 
       if (!goalName || !contribName || !mobileRaw || !amount) {
         blankRows.push(idx + 2); // +2: header row + 1-indexing
@@ -191,13 +194,14 @@ router.post('/import-goals', async (req, res) => {
       goalMap[goalName].push({
         name: contribName,
         mobile,
-        amount: Number(amount) || 0
+        amount: Number(amount) || 0,
+        ...(address ? { address } : {})
       });
     });
 
     if (blankRows.length > 0) {
       return res.status(400).json({
-        error: `All columns are mandatory — some fields are left blank at rows: ${blankRows.slice(0,5).join(', ')}${blankRows.length > 5 ? '...' : ''}. Please fill and upload again.`
+        error: `Goal name, contributor name, mobile number, and amount are mandatory (Address is optional) — some are left blank at rows: ${blankRows.slice(0,5).join(', ')}${blankRows.length > 5 ? '...' : ''}. Please fill and upload again.`
       });
     }
     if (invalidMobileRows.length > 0) {
