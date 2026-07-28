@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const supabase = require('../../lib/supabase');
@@ -7,6 +8,25 @@ const { encrypt, decrypt } = require('../../utils/cryptoVault');
 const { maskKeyId } = require('../../utils/gatewayValidation');
 
 const router = express.Router();
+
+// ---------------------------------------------------------------
+// Bulk-send progress tracking. At 1s/recipient a few-hundred-contact
+// send can take several minutes, too long for a single blocking HTTP
+// request — so the send POST kicks off the loop in the background and
+// returns a jobId immediately; the frontend polls the status route for
+// live sent/total counts to drive a progress bar. This is a single
+// Node process, so an in-memory Map is enough — jobs are swept out a
+// while after they finish so this can't grow unbounded.
+// ---------------------------------------------------------------
+const bulkJobs = new Map();
+const JOB_RESULT_TTL_MS = 15 * 60 * 1000;
+
+function sweepFinishedJobs() {
+  const now = Date.now();
+  for (const [id, job] of bulkJobs) {
+    if (job.done && now - job.finishedAt > JOB_RESULT_TTL_MS) bulkJobs.delete(id);
+  }
+}
 
 // ===============================================================
 // PRO WEB DASHBOARD — WhatsApp Business API integration (Meta Cloud
@@ -169,9 +189,49 @@ router.post('/web-remove-whatsapp-integration', requireProToken, async (req, res
   }
 });
 
+// Runs the actual send loop in the background against an already-created
+// job entry, updating its progress as each recipient goes through —
+// separated from the route handler so the route can return the jobId
+// immediately instead of blocking for the whole send.
+async function runBulkSendJob(job, integration, accessToken, recipients) {
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i];
+    const toNumber = toWhatsAppNumber(r.mobile);
+    if (!toNumber) {
+      job.results.push({ mobile: r.mobile, success: false, error: 'Invalid mobile number' });
+    } else {
+      try {
+        let resp, json;
+        let attempt = 0;
+        while (true) {
+          ({ resp, json } = await sendWhatsAppTemplate(integration, accessToken, toNumber, r));
+          if (resp.ok || !isRateLimited(resp.status, json) || attempt >= RATE_LIMIT_BACKOFFS_MS.length) break;
+          await sleep(RATE_LIMIT_BACKOFFS_MS[attempt]);
+          attempt++;
+        }
+        if (!resp.ok) {
+          job.results.push({ mobile: r.mobile, success: false, error: json?.error?.message || `HTTP ${resp.status}` });
+        } else {
+          job.results.push({ mobile: r.mobile, success: true });
+        }
+      } catch (sendErr) {
+        job.results.push({ mobile: r.mobile, success: false, error: sendErr?.message || 'Send failed' });
+      }
+    }
+
+    job.sentCount = i + 1;
+    if (i < recipients.length - 1) await sleep(BULK_SEND_DELAY_MS);
+  }
+
+  job.done = true;
+  job.finishedAt = Date.now();
+}
+
 // --- Send bulk reminders via the treasurer's own WhatsApp Business API ---
 // This is what makes it a TRUE one-click send — the loop happens here,
-// server-side, using their Meta credentials, not in the browser.
+// server-side, using their Meta credentials, not in the browser. Kicks
+// off in the background and hands back a jobId right away; poll
+// /web-whatsapp-bulk-status/:jobId for live progress.
 router.post('/web-send-whatsapp-bulk', requireProToken, async (req, res) => {
   const recipients = Array.isArray(req.body.recipients) ? req.body.recipients : [];
   if (!recipients.length) return res.status(400).json({ error: 'recipients (a non-empty array) is required' });
@@ -192,42 +252,39 @@ router.post('/web-send-whatsapp-bulk', requireProToken, async (req, res) => {
       return res.status(500).json({ error: 'Could not read your saved WhatsApp credentials. Please reconnect in Settings.' });
     }
 
-    const results = [];
-    for (let i = 0; i < recipients.length; i++) {
-      const r = recipients[i];
-      const toNumber = toWhatsAppNumber(r.mobile);
-      if (!toNumber) {
-        results.push({ mobile: r.mobile, success: false, error: 'Invalid mobile number' });
-        continue;
-      }
+    sweepFinishedJobs();
+    const jobId = crypto.randomUUID();
+    const job = { userId: req.proUserId, sentCount: 0, totalCount: recipients.length, done: false, results: [], finishedAt: null };
+    bulkJobs.set(jobId, job);
 
-      try {
-        let resp, json;
-        let attempt = 0;
-        while (true) {
-          ({ resp, json } = await sendWhatsAppTemplate(integration, accessToken, toNumber, r));
-          if (resp.ok || !isRateLimited(resp.status, json) || attempt >= RATE_LIMIT_BACKOFFS_MS.length) break;
-          await sleep(RATE_LIMIT_BACKOFFS_MS[attempt]);
-          attempt++;
-        }
-        if (!resp.ok) {
-          results.push({ mobile: r.mobile, success: false, error: json?.error?.message || `HTTP ${resp.status}` });
-        } else {
-          results.push({ mobile: r.mobile, success: true });
-        }
-      } catch (sendErr) {
-        results.push({ mobile: r.mobile, success: false, error: sendErr?.message || 'Send failed' });
-      }
+    runBulkSendJob(job, integration, accessToken, recipients).catch(err => {
+      console.error('web-send-whatsapp-bulk job error:', err?.message || err);
+      job.done = true;
+      job.finishedAt = Date.now();
+      job.jobError = 'Server error partway through sending. Some reminders may not have gone out.';
+    });
 
-      if (i < recipients.length - 1) await sleep(BULK_SEND_DELAY_MS);
-    }
-
-    const sentCount = results.filter(r => r.success).length;
-    res.json({ success: true, sentCount, totalCount: recipients.length, results });
+    res.json({ success: true, jobId, totalCount: recipients.length });
   } catch (err) {
     console.error('web-send-whatsapp-bulk error:', err?.message || err);
     res.status(500).json({ error: 'Server error. Please try again.' });
   }
+});
+
+// --- Poll progress of a bulk send started above ---
+router.get('/web-whatsapp-bulk-status/:jobId', requireProToken, (req, res) => {
+  const job = bulkJobs.get(req.params.jobId);
+  if (!job || job.userId !== req.proUserId) {
+    return res.status(404).json({ error: 'Unknown or expired job.' });
+  }
+
+  const payload = { success: true, sentCount: job.sentCount, totalCount: job.totalCount, done: job.done };
+  if (job.done) {
+    payload.results = job.results;
+    payload.sentSuccessCount = job.results.filter(r => r.success).length;
+    if (job.jobError) payload.error = job.jobError;
+  }
+  res.json(payload);
 });
 
 module.exports = router;
