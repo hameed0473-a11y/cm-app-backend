@@ -28,6 +28,60 @@ const CURRENCY_WORDS = {
   'australian dollar': 'AUD', 'canadian dollar': 'CAD', 'south african rand': 'ZAR', francs: 'CHF', franc: 'CHF'
 };
 
+// ---------------------------------------------------------------
+// ROOT-MENU LOCALIZATION — the assistant's opening greeting/menu (see
+// ROOT_MENU_QUESTION-equivalent below) is the highest-traffic, most
+// visible thing a user reads before ever typing/speaking a command, so
+// it's the first thing localized to avoid every non-English session
+// escalating to Claude just to navigate the root menu. Sub-menus (Goal/
+// Subscriber/Accounting/Collect) are NOT yet localized — a deliberate,
+// narrower first pass; they still fall through to Claude for non-English
+// replies exactly as before. See parseLocalIntent's `lang` param.
+// ---------------------------------------------------------------
+const ROOT_MENU_TEXT = {
+  en: { greeting: 'Hi, welcome to Afleen — your AI assistant! 👋', pickLine: 'Please pick a section below, or just type what you need:', goals: 'Goals', subscribers: 'Subscribers', pending: 'Pending/Missed', accounting: 'Accounting', other: 'Any other', openingPending: 'Opening Pending for you.' },
+  de: { greeting: 'Hallo, willkommen bei Afleen — Ihrem KI-Assistenten! 👋', pickLine: 'Bitte wählen Sie unten einen Bereich, oder tippen Sie einfach, was Sie brauchen:', goals: 'Ziele', subscribers: 'Abonnenten', pending: 'Verpasst/Ausstehend', accounting: 'Buchhaltung', other: 'Sonstiges', openingPending: 'Öffne Ausstehend für Sie.' },
+  fr: { greeting: 'Bonjour, bienvenue sur Afleen — votre assistant IA ! 👋', pickLine: 'Veuillez choisir une section ci-dessous, ou tapez simplement ce dont vous avez besoin :', goals: 'Objectifs', subscribers: 'Abonnés', pending: 'Manqués/En attente', accounting: 'Comptabilité', other: 'Autre chose', openingPending: 'Ouverture de En attente pour vous.' },
+  es: { greeting: 'Hola, bienvenido a Afleen — tu asistente de IA! 👋', pickLine: 'Elige una sección abajo, o simplemente escribe lo que necesitas:', goals: 'Metas', subscribers: 'Suscriptores', pending: 'Perdidos/Pendientes', accounting: 'Contabilidad', other: 'Otra cosa', openingPending: 'Abriendo Pendientes para ti.' },
+  ar: { greeting: 'مرحبًا بك في أفلين — مساعدك الذكي! 👋', pickLine: 'يرجى اختيار قسم أدناه، أو اكتب ما تحتاجه مباشرة:', goals: 'الأهداف', subscribers: 'المشتركون', pending: 'فائت/معلّق', accounting: 'المحاسبة', other: 'أخرى', openingPending: 'يتم فتح المعلّق من أجلك.' },
+  ru: { greeting: 'Здравствуйте, добро пожаловать в Afleen — ваш ИИ-помощник! 👋', pickLine: 'Выберите раздел ниже или просто напишите, что вам нужно:', goals: 'Цели', subscribers: 'Подписчики', pending: 'Пропущено/Ожидает', accounting: 'Бухгалтерия', other: 'Другое', openingPending: 'Открываю раздел «Ожидает» для вас.' },
+  pt: { greeting: 'Olá, bem-vindo ao Afleen — seu assistente de IA! 👋', pickLine: 'Escolha uma seção abaixo, ou apenas digite o que você precisa:', goals: 'Metas', subscribers: 'Assinantes', pending: 'Perdidos/Pendentes', accounting: 'Contabilidade', other: 'Outra coisa', openingPending: 'Abrindo Pendentes para você.' },
+  zh: { greeting: '您好，欢迎使用 Afleen — 您的 AI 助手！👋', pickLine: '请选择下方的一个板块，或直接输入您的需求：', goals: '目标', subscribers: '订阅者', pending: '错过/待处理', accounting: '账务', other: '其他', openingPending: '正在为您打开待处理。' }
+};
+
+// Per-language keyword matching for a typed/spoken root-menu reply, in
+// addition to the digit shortcuts (1-5) which already work in every
+// language unchanged. "claude"/"ai" are recognized as option-5 triggers
+// in every language since they're commonly typed/spoken as-is regardless
+// of UI language.
+const ROOT_OPTION_KEYWORDS = {
+  en: { 1: /\bgoals?\b/i, 2: /\bsubscribers?\b/i, 3: /\bpending\b|\bmissed\b/i, 4: /\baccounting\b|\baccounts?\b/i, 5: /\b(something else|not covered|other|claude|ai)\b/i },
+  de: { 1: /\bziele?\b/i, 2: /\babonnent(en)?\b/i, 3: /\bverpasst\b|\bausstehend\b/i, 4: /\bbuchhaltung\b/i, 5: /\b(sonstiges|etwas anderes|andere|claude|ai)\b/i },
+  fr: { 1: /\bobjectifs?\b/i, 2: /\babonn[ée]s?\b/i, 3: /\bmanqu[ée]s?\b|\battente\b/i, 4: /\bcomptabilit[ée]\b/i, 5: /\b(autre chose|autre|claude|ai)\b/i },
+  es: { 1: /\bmetas?\b/i, 2: /\bsuscriptor(es)?\b/i, 3: /\bpendientes?\b|\bperdidos?\b/i, 4: /\bcontabilidad\b/i, 5: /\b(otra cosa|otro|claude|ai)\b/i },
+  ar: { 1: /الأهداف|هدف/, 2: /مشترك/, 3: /فائت|معلق|معلّق/, 4: /محاسبة/, 5: /أخرى|claude|ai/i },
+  ru: { 1: /\bцел(и|ь)\b/i, 2: /\bподписчик/i, 3: /\bпропущено\b|\bожидает\b/i, 4: /\bбухгалтери/i, 5: /\bдругое\b|claude|ai/i },
+  pt: { 1: /\bmetas?\b/i, 2: /\bassinante(s)?\b/i, 3: /\bperdidos?\b|\bpendentes?\b/i, 4: /\bcontabilidade\b/i, 5: /\b(outra coisa|outro|claude|ai)\b/i },
+  zh: { 1: /目标/, 2: /订阅/, 3: /待处理|错过/, 4: /账务|财务/, 5: /其他|claude|ai/i }
+};
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function rootMenuQuestion(lang) {
+  const t = ROOT_MENU_TEXT[lang] || ROOT_MENU_TEXT.en;
+  return `${t.greeting}\n${t.pickLine}\n1. ${t.goals}\n2. ${t.subscribers}\n3. ${t.pending}\n4. ${t.accounting}\n5. ${t.other}`;
+}
+
+// The single module-level "current request's language" — safe because
+// this whole file is 100% synchronous (no await anywhere), so it's set
+// once at the top of parseLocalIntent and only ever read again later in
+// that same synchronous call before the next request could touch it.
+// Avoids threading a `lang` parameter through every one of the ~20
+// FLOW_OWNERS parser functions just for the root menu's sake.
+let currentLang = 'en';
+
 const AMOUNT_RE = /(?:target|amount)\s*(?:of)?\s*(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)|(?:₹|\$|£|€|rs\.?)\s*(\d+(?:\.\d+)?)/i;
 
 function extractAmount(msg) {
@@ -1481,21 +1535,32 @@ function parseAccountingFallbackMenu(msg, history) {
 // Typed shortcuts (e.g. typing "create a goal" directly) keep working
 // exactly as before — this menu is an additional, easier front door, not
 // a replacement requirement.
+//
+// Localized to all 8 UI languages (see ROOT_MENU_TEXT above) — the marker
+// regex matches ANY language's greeting line, and replies/keyword matching
+// use `currentLang` (set once per request in parseLocalIntent) to reply in
+// the same language the greeting was shown in.
 // ---------------------------------------------------------------
-const ROOT_MENU_QUESTION = 'Hi, welcome to Afleen — your AI assistant! 👋\nPlease pick a section below, or just type what you need:\n1. Goals\n2. Subscribers\n3. Pending/Missed\n4. Accounting\n5. Any other';
-const ROOT_MENU_RE = /please pick a section below, or just type what you need:/i;
+const ROOT_MENU_RE = new RegExp(
+  Object.values(ROOT_MENU_TEXT).map(t => escapeRegExp(t.pickLine)).join('|'),
+  'i'
+);
 PENDING_FLOW_MARKERS.push(ROOT_MENU_RE);
 
 // Shared between parseRootMenu (a menu pick) and parseBareNumberLookup
 // below (a bare number typed with no menu actually showing) — both need
 // to resolve "which root-menu option is this" to the exact same result.
+// parseBareNumberLookup's confirmation question isn't localized yet (a
+// narrower fallback, out of scope for this pass), so it always uses the
+// English labels — rootOptionResult below still replies in currentLang.
 const ROOT_OPTION_LABELS = { 1: 'Goals', 2: 'Subscribers', 3: 'Pending/Missed', 4: 'Accounting', 5: 'Any other' };
 
 function rootOptionResult(num) {
+  const t = ROOT_MENU_TEXT[currentLang] || ROOT_MENU_TEXT.en;
   switch (num) {
     case 1: return { reply: GOAL_MENU_QUESTION, handled: true };
     case 2: return { reply: SUBSCRIBER_MENU_QUESTION, handled: true };
-    case 3: return { reply: `Opening Pending for you.\n\n${ROOT_MENU_QUESTION}`, action: { type: 'view_pending', params: {} }, handled: true };
+    case 3: return { reply: `${t.openingPending}\n\n${rootMenuQuestion(currentLang)}`, action: { type: 'view_pending', params: {} }, handled: true };
     case 4: return { reply: ACCOUNTING_MENU_QUESTION, handled: true };
     case 5: return { reply: ANY_OTHER_ASK_TEXT, handled: true };
     default: return null;
@@ -1508,15 +1573,16 @@ function parseRootMenu(msg, history) {
   if (!(lastAssistant && ROOT_MENU_RE.test(lastAssistant.content))) return null;
 
   const choice = msg.trim().toLowerCase();
+  const kw = ROOT_OPTION_KEYWORDS[currentLang] || ROOT_OPTION_KEYWORDS.en;
 
-  if (/^1\b/.test(choice) || /\bgoals?\b/i.test(choice)) return rootOptionResult(1);
-  if (/^2\b/.test(choice) || /\bsubscribers?\b/i.test(choice)) return rootOptionResult(2);
-  if (/^3\b/.test(choice) || /\bpending\b|\bmissed\b/i.test(choice)) return rootOptionResult(3);
-  if (/^4\b/.test(choice) || /\baccounting\b|\baccounts?\b/i.test(choice)) return rootOptionResult(4);
-  if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) return rootOptionResult(5);
+  if (/^1\b/.test(choice) || kw[1].test(choice)) return rootOptionResult(1);
+  if (/^2\b/.test(choice) || kw[2].test(choice)) return rootOptionResult(2);
+  if (/^3\b/.test(choice) || kw[3].test(choice)) return rootOptionResult(3);
+  if (/^4\b/.test(choice) || kw[4].test(choice)) return rootOptionResult(4);
+  if (/^5\b/.test(choice) || kw[5].test(choice)) return rootOptionResult(5);
 
   // Unrecognized reply to the menu — re-ask rather than guess.
-  return { reply: ROOT_MENU_QUESTION, handled: true };
+  return { reply: rootMenuQuestion(currentLang), handled: true };
 }
 
 // ---------------------------------------------------------------
@@ -1761,7 +1827,8 @@ const FLOW_OWNERS = [
   { markers: [BARE_NUMBER_CONFIRM_RE], fn: parseBareNumberLookup }
 ];
 
-function parseLocalIntent(message, history) {
+function parseLocalIntent(message, history, lang) {
+  currentLang = ROOT_MENU_TEXT[lang] ? lang : 'en';
   const msg = message.trim();
   const safeHistory = Array.isArray(history) ? history : [];
 

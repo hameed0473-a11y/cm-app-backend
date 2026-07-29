@@ -438,7 +438,7 @@ async function logEscalation(userId, message, hadApiKey, assistantReply, actionT
 }
 
 router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken, async (req, res) => {
-  const { message, history } = req.body;
+  const { message, history, lang } = req.body;
 
   if (typeof message !== 'string' || !message.trim()) {
     return res.status(400).json({ error: 'message is required' });
@@ -455,7 +455,7 @@ router.post('/assistant-chat', rateLimit(20, 60 * 1000), requireProOrStaffToken,
     : [];
 
   // Try the free local parser first, on every request, key or no key.
-  const local = parseLocalIntent(message.trim(), priorTurns);
+  const local = parseLocalIntent(message.trim(), priorTurns, typeof lang === 'string' ? lang : undefined);
   if (local.handled) {
     const responseBody = { success: true, reply: local.reply };
     if (local.action) responseBody.action = local.action;
