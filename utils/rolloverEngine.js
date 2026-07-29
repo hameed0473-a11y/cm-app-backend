@@ -26,13 +26,28 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
+// Quarterly uses calendar quarters (Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec),
+// keyed "YYYY-Qn" — deliberately distinct from the "YYYY-MM" shape monthly/
+// installment goals use, so isPeriodBefore's plain string comparison still
+// sorts correctly within a category (never compared across categories).
 function periodKeyForDate(date, category) {
   if (category === 'yearly') return String(date.getFullYear());
+  if (category === 'quarterly') {
+    const quarter = Math.floor(date.getMonth() / 3) + 1;
+    return `${date.getFullYear()}-Q${quarter}`;
+  }
+  // 'monthly' and 'installment' (which auto-stops after N monthly periods,
+  // see the installmentsPaid/totalInstallments handling below) share this
+  // same "YYYY-MM" period shape.
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
 function nextPeriodKey(key, category) {
   if (category === 'yearly') return String(Number(key) + 1);
+  if (category === 'quarterly') {
+    const [y, q] = key.split('-Q').map(Number);
+    return q >= 4 ? `${y + 1}-Q1` : `${y}-Q${q + 1}`;
+  }
   const [y, m] = key.split('-').map(Number);
   const d = new Date(y, m, 1); // m is already 1-indexed here, so this lands on next month
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -40,6 +55,10 @@ function nextPeriodKey(key, category) {
 
 function periodLabel(key, category) {
   if (category === 'yearly') return key;
+  if (category === 'quarterly') {
+    const [y, q] = key.split('-Q');
+    return `Q${q} ${y}`;
+  }
   const [y, m] = key.split('-').map(Number);
   return `${MONTH_NAMES[m - 1]} ${y}`;
 }
@@ -106,7 +125,7 @@ async function processUserRow(row, today) {
   // Snapshot the eligible starting set before we start pushing new targets
   // into `targets` mid-loop.
   const eligible = targets.filter(t =>
-    (t.category === 'monthly' || t.category === 'yearly') &&
+    (t.category === 'monthly' || t.category === 'yearly' || t.category === 'quarterly' || t.category === 'installment') &&
     t.status === 'active' &&
     t.rollover !== false
   );
@@ -148,15 +167,27 @@ async function processUserRow(row, today) {
       // Prefixed with the owning pro user's own ID (see utils/idGen.js) —
       // can never collide with another user's goal id.
       const newTargetId = await nextId(supabase, userId, category);
+      // Installment goals are otherwise identical to monthly (same "YYYY-MM"
+      // period shape, see periodKeyForDate above) but carry a fixed
+      // totalInstallments count and auto-stop rolling over once that many
+      // periods have been created — the "recurring but self-terminating"
+      // behavior, as opposed to monthly/yearly/quarterly which roll over
+      // indefinitely until the treasurer stops them.
+      const isInstallment = category === 'installment';
+      const installmentsPaid = isInstallment ? (working.installmentsPaid || 0) + 1 : undefined;
+      const totalInstallments = isInstallment ? working.totalInstallments : undefined;
+      const installmentFields = isInstallment
+        ? { installmentsPaid, totalInstallments, rollover: totalInstallments ? installmentsPaid < totalInstallments : true }
+        : { rollover: true };
       const newTarget = {
         id: newTargetId,
         name: `${baseName} — ${periodLabel(nextKey, category)}`,
         category,
         status: 'active',
         targetAmount: working.targetAmount || 0,
-        rollover: true,
         rolloverBaseName: baseName,
-        rolloverPeriodKey: nextKey
+        rolloverPeriodKey: nextKey,
+        ...installmentFields
       };
       targets.push(newTarget);
       afterWrite.push(() => mirrorTarget(supabase, userId, newTarget));
@@ -211,6 +242,12 @@ async function processUserRow(row, today) {
       changed = true;
       rolloverCount++;
       working = newTarget;
+
+      // Stop chaining once an installment goal has hit its cap — even if
+      // the cron ran late enough that currentPeriod is still further
+      // ahead, a capped-out installment goal must not keep generating
+      // more periods past totalInstallments.
+      if (working.rollover === false) break;
     }
   }
 

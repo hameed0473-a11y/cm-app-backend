@@ -174,7 +174,9 @@ function extractAmount(msg) {
 // in (this doesn't need to know currentLang — just recognize the word).
 function extractCategory(msg) {
   if (/\bmonthly\b|\bmonatlich\b|\bmensuel(?:le)?\b|\bmensual(?:es)?\b|شهري|ежемесячн|\bmensal(?:is)?\b|月度|每月/i.test(msg)) return 'monthly';
+  if (/\bquarterly\b|\bvierteljährlich\w*\b|\btrimestriel(?:le)?\b|\btrimestral(?:es)?\b|ربع سنوي|ежеквартальн\w*|季度|每季度/i.test(msg)) return 'quarterly';
   if (/\byearly\b|\bannual(?:ly)?\b|\bjährlich\b|\bannuel(?:le)?\b|\banual(?:es)?\b|سنوي|ежегодн|年度|每年/i.test(msg)) return 'yearly';
+  if (/\binstal(?:l)?ments?\b|\bratenzahlung\b|\braten\b|\bversements?\b|\béchelonné\w*\b|\bcuotas\b|\ba plazos\b|أقساط|рассрочк\w*|взнос\w*|\bparcelas?\b|\bparcelado\b|分期|分期付款/i.test(msg)) return 'installment';
   if (/\bevent\b|\bone[- ]?off\b|\bpledge\b|\beinmalig\w*\b|\bzusage\b|\bponctuel(?:le)?\b|\bpromesse\b|\búnic[oa]\b|\bpromesa\b|مرة واحدة|تعهد|разов|обещани|\bpromessa\b|一次性|认捐/i.test(msg)) return 'event';
   return null;
 }
@@ -292,18 +294,19 @@ const GREETING_RE = /^\s*(hi+|hello+|hey+|hola|good\s?morning|good\s?afternoon|g
 // its question embeds the goal name — extraction happens via
 // execFlowAnyLang inside parseCreateGoal itself, this only needs .test().
 const CREATE_GOAL_TEXT = {
-  en: { confirm: 'Are you saying you\'d like to create a new goal?', askName: 'Great — what should the goal be named?', askNameEmpty: 'What should the goal be named?', askType: 'What type of goal is "{name}" — monthly, yearly, or a one-off/event pledge?', typeRetry: 'Sorry, I didn\'t catch the type — is "{name}" a monthly goal, a yearly goal, or a one-off/event pledge?' },
-  de: { confirm: 'Möchten Sie ein neues Ziel erstellen?', askName: 'Gut — wie soll das Ziel heißen?', askNameEmpty: 'Wie soll das Ziel heißen?', askType: 'Welcher Zieltyp ist "{name}" — monatlich, jährlich oder eine einmalige Zusage?', typeRetry: 'Entschuldigung, ich habe den Typ nicht verstanden — ist "{name}" ein monatliches Ziel, ein jährliches Ziel oder eine einmalige Zusage?' },
-  fr: { confirm: 'Voulez-vous dire que vous souhaitez créer un nouvel objectif ?', askName: 'Très bien — comment doit s\'appeler l\'objectif ?', askNameEmpty: 'Comment doit s\'appeler l\'objectif ?', askType: 'Quel type d\'objectif est "{name}" — mensuel, annuel, ou une promesse ponctuelle ?', typeRetry: 'Désolé, je n\'ai pas compris le type — "{name}" est-il un objectif mensuel, annuel, ou une promesse ponctuelle ?' },
-  es: { confirm: '¿Quieres decir que te gustaría crear una nueva meta?', askName: 'Genial — ¿cómo debería llamarse la meta?', askNameEmpty: '¿Cómo debería llamarse la meta?', askType: '¿Qué tipo de meta es "{name}" — mensual, anual, o una promesa única?', typeRetry: 'Lo siento, no entendí el tipo — ¿es "{name}" una meta mensual, anual, o una promesa única?' },
-  ar: { confirm: 'هل تقصد أنك تريد إنشاء هدف جديد؟', askName: 'رائع — ما الاسم الذي تريده للهدف؟', askNameEmpty: 'ما الاسم الذي تريده للهدف؟', askType: 'ما نوع الهدف "{name}" — شهري، سنوي، أم تعهد لمرة واحدة؟', typeRetry: 'عذرًا، لم أفهم النوع — هل "{name}" هدف شهري، سنوي، أم تعهد لمرة واحدة؟' },
-  ru: { confirm: 'Вы хотите создать новую цель?', askName: 'Отлично — как назвать цель?', askNameEmpty: 'Как назвать цель?', askType: 'Какой тип у цели «{name}» — ежемесячная, ежегодная или разовое обещание?', typeRetry: 'Извините, я не понял тип — «{name}» это ежемесячная цель, ежегодная, или разовое обещание?' },
-  pt: { confirm: 'Você gostaria de criar uma nova meta?', askName: 'Ótimo — como a meta deve se chamar?', askNameEmpty: 'Como a meta deve se chamar?', askType: 'Que tipo de meta é "{name}" — mensal, anual, ou uma promessa única?', typeRetry: 'Desculpe, não entendi o tipo — "{name}" é uma meta mensal, anual, ou uma promessa única?' },
-  zh: { confirm: '您是想创建一个新目标吗？', askName: '好的 — 这个目标叫什么名字？', askNameEmpty: '这个目标叫什么名字？', askType: '"{name}"是什么类型的目标 — 月度、年度，还是一次性认捐？', typeRetry: '抱歉，我没听清类型 — "{name}"是月度目标、年度目标，还是一次性认捐？' }
+  en: { confirm: 'Are you saying you\'d like to create a new goal?', askName: 'Great — what should the goal be named?', askNameEmpty: 'What should the goal be named?', askType: 'What type of goal is "{name}" — monthly, quarterly, yearly, installment, or a one-off/event pledge?', typeRetry: 'Sorry, I didn\'t catch the type — is "{name}" a monthly, quarterly, yearly, installment, or a one-off/event pledge goal?', askInstallmentCount: 'Great — how many installments should "{name}" be split into?', installmentCountRetry: 'Sorry, I need a whole number of 2 or more — how many installments should "{name}" be split into?' },
+  de: { confirm: 'Möchten Sie ein neues Ziel erstellen?', askName: 'Gut — wie soll das Ziel heißen?', askNameEmpty: 'Wie soll das Ziel heißen?', askType: 'Welcher Zieltyp ist "{name}" — monatlich, vierteljährlich, jährlich, in Raten, oder eine einmalige Zusage?', typeRetry: 'Entschuldigung, ich habe den Typ nicht verstanden — ist "{name}" monatlich, vierteljährlich, jährlich, in Raten, oder eine einmalige Zusage?', askInstallmentCount: 'Gut — in wie viele Raten soll "{name}" aufgeteilt werden?', installmentCountRetry: 'Entschuldigung, ich brauche eine ganze Zahl ab 2 — in wie viele Raten soll "{name}" aufgeteilt werden?' },
+  fr: { confirm: 'Voulez-vous dire que vous souhaitez créer un nouvel objectif ?', askName: 'Très bien — comment doit s\'appeler l\'objectif ?', askNameEmpty: 'Comment doit s\'appeler l\'objectif ?', askType: 'Quel type d\'objectif est "{name}" — mensuel, trimestriel, annuel, en versements échelonnés, ou une promesse ponctuelle ?', typeRetry: 'Désolé, je n\'ai pas compris le type — "{name}" est-il mensuel, trimestriel, annuel, en versements échelonnés, ou une promesse ponctuelle ?', askInstallmentCount: 'Très bien — en combien de versements "{name}" doit-il être réparti ?', installmentCountRetry: 'Désolé, j\'ai besoin d\'un nombre entier d\'au moins 2 — en combien de versements "{name}" doit-il être réparti ?' },
+  es: { confirm: '¿Quieres decir que te gustaría crear una nueva meta?', askName: 'Genial — ¿cómo debería llamarse la meta?', askNameEmpty: '¿Cómo debería llamarse la meta?', askType: '¿Qué tipo de meta es "{name}" — mensual, trimestral, anual, en cuotas, o una promesa única?', typeRetry: 'Lo siento, no entendí el tipo — ¿es "{name}" mensual, trimestral, anual, en cuotas, o una promesa única?', askInstallmentCount: 'Genial — ¿en cuántas cuotas debería dividirse "{name}"?', installmentCountRetry: 'Lo siento, necesito un número entero de 2 o más — ¿en cuántas cuotas debería dividirse "{name}"?' },
+  ar: { confirm: 'هل تقصد أنك تريد إنشاء هدف جديد؟', askName: 'رائع — ما الاسم الذي تريده للهدف؟', askNameEmpty: 'ما الاسم الذي تريده للهدف؟', askType: 'ما نوع الهدف "{name}" — شهري، ربع سنوي، سنوي، بالتقسيط، أم تعهد لمرة واحدة؟', typeRetry: 'عذرًا، لم أفهم النوع — هل "{name}" شهري، ربع سنوي، سنوي، بالتقسيط، أم تعهد لمرة واحدة؟', askInstallmentCount: 'رائع — إلى كم قسطًا يجب تقسيم "{name}"؟', installmentCountRetry: 'عذرًا، أحتاج رقمًا صحيحًا لا يقل عن 2 — إلى كم قسطًا يجب تقسيم "{name}"؟' },
+  ru: { confirm: 'Вы хотите создать новую цель?', askName: 'Отлично — как назвать цель?', askNameEmpty: 'Как назвать цель?', askType: 'Какой тип у цели «{name}» — ежемесячная, ежеквартальная, ежегодная, с рассрочкой, или разовое обещание?', typeRetry: 'Извините, я не понял тип — «{name}» это ежемесячная, ежеквартальная, ежегодная, с рассрочкой, или разовое обещание?', askInstallmentCount: 'Отлично — на сколько взносов разделить «{name}»?', installmentCountRetry: 'Извините, нужно целое число не меньше 2 — на сколько взносов разделить «{name}»?' },
+  pt: { confirm: 'Você gostaria de criar uma nova meta?', askName: 'Ótimo — como a meta deve se chamar?', askNameEmpty: 'Como a meta deve se chamar?', askType: 'Que tipo de meta é "{name}" — mensal, trimestral, anual, parcelada, ou uma promessa única?', typeRetry: 'Desculpe, não entendi o tipo — "{name}" é mensal, trimestral, anual, parcelada, ou uma promessa única?', askInstallmentCount: 'Ótimo — em quantas parcelas "{name}" deve ser dividida?', installmentCountRetry: 'Desculpe, preciso de um número inteiro de 2 ou mais — em quantas parcelas "{name}" deve ser dividida?' },
+  zh: { confirm: '您是想创建一个新目标吗？', askName: '好的 — 这个目标叫什么名字？', askNameEmpty: '这个目标叫什么名字？', askType: '"{name}"是什么类型的目标 — 月度、季度、年度、分期，还是一次性认捐？', typeRetry: '抱歉，我没听清类型 — "{name}"是月度、季度、年度、分期，还是一次性认捐？', askInstallmentCount: '好的 — "{name}"应分成多少期？', installmentCountRetry: '抱歉，需要一个至少为2的整数 — "{name}"应分成多少期？' }
 };
 const CREATE_GOAL_CONFIRM_RE = new RegExp(Object.values(CREATE_GOAL_TEXT).map(t => escapeRegExp(t.confirm)).join('|'), 'i');
 const CREATE_GOAL_NAME_RE = new RegExp(Object.values(CREATE_GOAL_TEXT).map(t => `^${escapeRegExp(t.askName)}$`).join('|'), 'i');
 const CREATE_GOAL_TYPE_RE = { test: (text) => testFlowAnyLang(CREATE_GOAL_TEXT, 'askType', text) };
+const CREATE_GOAL_INSTALLMENT_COUNT_RE = { test: (text) => testFlowAnyLang(CREATE_GOAL_TEXT, 'askInstallmentCount', text) };
 
 // Registry of every question regex belonging to a confirm-first multi-turn
 // flow — each flow pushes its own step markers onto this array right after
@@ -311,7 +314,7 @@ const CREATE_GOAL_TYPE_RE = { test: (text) => testFlowAnyLang(CREATE_GOAL_TEXT, 
 // back out with "cancel"/"stop"/etc. at ANY step of ANY such flow, checked
 // from the very top of parseLocalIntent before the delete/remove intent
 // check would otherwise misread "cancel" as wanting to delete something.
-const PENDING_FLOW_MARKERS = [CREATE_GOAL_CONFIRM_RE, CREATE_GOAL_NAME_RE, CREATE_GOAL_TYPE_RE];
+const PENDING_FLOW_MARKERS = [CREATE_GOAL_CONFIRM_RE, CREATE_GOAL_NAME_RE, CREATE_GOAL_TYPE_RE, CREATE_GOAL_INSTALLMENT_COUNT_RE];
 
 // Separate, smaller registry for steps where a bare "no" is a normal answer
 // to that specific question (not an abort) — e.g. "no goal, just add them"
@@ -371,10 +374,37 @@ const GENERIC_GOAL_WORDS_RE = /^(?:a|the|this|that|my|our|it)\s*(?:goal)?$/i;
 // a name once a type has been detected in it (e.g. "Water Fund, monthly" ->
 // name "Water Fund", category 'monthly') — mirrors extractCategory's word
 // list so cleanup works regardless of which language the type was typed in.
-const CATEGORY_WORDS_STRIP_RE = /\b(monthly|yearly|annual(?:ly)?|event|one[- ]?off|pledge|monatlich|jährlich|einmalig\w*|zusage|mensuel(?:le)?|annuel(?:le)?|ponctuel(?:le)?|promesse|mensual(?:es)?|anual(?:es)?|únic[oa]|promesa|mensal(?:is)?|anual|promessa)\b|شهري|سنوي|مرة واحدة|تعهد|ежемесячн\w*|ежегодн\w*|разов\w*|обещани\w*|月度|每月|年度|每年|一次性|认捐/gi;
+const CATEGORY_WORDS_STRIP_RE = /\b(monthly|quarterly|yearly|annual(?:ly)?|event|one[- ]?off|pledge|instal(?:l)?ments?|monatlich|vierteljährlich\w*|jährlich|einmalig\w*|zusage|ratenzahlung|raten|mensuel(?:le)?|trimestriel(?:le)?|annuel(?:le)?|ponctuel(?:le)?|promesse|versements?|échelonné\w*|mensual(?:es)?|trimestral(?:es)?|anual(?:es)?|únic[oa]|promesa|cuotas|a plazos|mensal(?:is)?|trimestral|anual|promessa|parcelas?|parcelado)\b|شهري|ربع سنوي|سنوي|مرة واحدة|تعهد|أقساط|ежемесячн\w*|ежеквартальн\w*|ежегодн\w*|разов\w*|обещани\w*|рассрочк\w*|взнос\w*|月度|每月|季度|每季度|年度|每年|一次性|认捐|分期|分期付款/gi;
+
+// Installment goals need a whole number of periods (2+) to split into,
+// used server-side by rolloverEngine.js to auto-stop rolling over once
+// that many periods have been created — see routes/web/goals.js.
+function extractInstallmentCount(msg) {
+  const m = msg.match(/\d+/);
+  if (!m) return null;
+  const n = parseInt(m[0], 10);
+  return (Number.isInteger(n) && n >= 2) ? n : null;
+}
 
 function parseCreateGoal(msg, history) {
   const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
+
+  // Step 5: answering "how many installments should X be split into?" —
+  // only reached for the installment category (steps 3/4 route here
+  // instead of finalizing directly, see below).
+  if (lastAssistant && CREATE_GOAL_INSTALLMENT_COUNT_RE.test(lastAssistant.content)) {
+    const extracted = execFlowAnyLang(CREATE_GOAL_TEXT, 'askInstallmentCount', lastAssistant.content);
+    const name = extracted ? extracted.name : '';
+    const totalInstallments = extractInstallmentCount(msg);
+    if (!totalInstallments) {
+      return { reply: renderFlow(CREATE_GOAL_TEXT, 'installmentCountRetry', { name }), handled: true };
+    }
+    return {
+      reply: 'Here\'s what I understood:',
+      action: { type: 'create_goal', params: { name, category: 'installment', targetAmount: 0, totalInstallments } },
+      handled: true
+    };
+  }
 
   // Step 4: answering "what type of goal is X — monthly, yearly, or pledge?"
   // (a "cancel"/"stop"/etc. reply here is already handled earlier, by
@@ -385,6 +415,11 @@ function parseCreateGoal(msg, history) {
     const category = extractCategory(msg);
     if (!category) {
       return { reply: renderFlow(CREATE_GOAL_TEXT, 'typeRetry', { name }), handled: true };
+    }
+    // Installments need one more question (how many) before the action can
+    // be finalized — every other category is ready to go immediately.
+    if (category === 'installment') {
+      return { reply: renderFlow(CREATE_GOAL_TEXT, 'askInstallmentCount', { name }), handled: true };
     }
     return {
       reply: 'Here\'s what I understood:',
@@ -406,6 +441,9 @@ function parseCreateGoal(msg, history) {
     const category = extractCategory(name);
     if (category) {
       name = name.replace(CATEGORY_WORDS_STRIP_RE, '').replace(/[,\s]+$/, '').replace(/\s{2,}/g, ' ').trim();
+      if (category === 'installment') {
+        return { reply: renderFlow(CREATE_GOAL_TEXT, 'askInstallmentCount', { name }), handled: true };
+      }
       return {
         reply: 'Here\'s what I understood:',
         action: { type: 'create_goal', params: { name, category, targetAmount: 0 } },
@@ -2438,7 +2476,7 @@ function parseSubscriberFallbackMenu(msg, history) {
 // before anything else gets a chance to misfire on this message.
 // ---------------------------------------------------------------
 const FLOW_OWNERS = [
-  { markers: [CREATE_GOAL_CONFIRM_RE, CREATE_GOAL_NAME_RE, CREATE_GOAL_TYPE_RE], fn: parseCreateGoal },
+  { markers: [CREATE_GOAL_CONFIRM_RE, CREATE_GOAL_NAME_RE, CREATE_GOAL_TYPE_RE, CREATE_GOAL_INSTALLMENT_COUNT_RE], fn: parseCreateGoal },
   { markers: [ADD_SUBSCRIBER_CONFIRM_RE, ADD_SUBSCRIBER_NAME_RE, ADD_SUBSCRIBER_MOBILE_RE, ADD_SUBSCRIBER_GOAL_OR_NOT_RE, ADD_SUBSCRIBER_AMOUNT_RE], fn: parseAddSubscriber },
   { markers: [SUBSCRIBE_CONFIRM_RE, SUBSCRIBE_WHO_RE, SUBSCRIBE_GOAL_RE, SUBSCRIBE_AMOUNT_RE], fn: parseSubscribeToGoal },
   { markers: [CREATE_PLEDGE_CONFIRM_RE, CREATE_PLEDGE_WHO_RE, CREATE_PLEDGE_GOAL_RE, CREATE_PLEDGE_AMOUNT_RE], fn: parseCreatePledge },

@@ -35,7 +35,7 @@ const SYSTEM_PROMPT = `You are the built-in voice/text assistant inside the AFTe
 
 Dashboard layout (left sidebar):
 - Overview: summary stats (total collected, subscribers, active goals, event pledges).
-- Goals and Pledges: create/manage monthly, yearly or one-off pledge goals.
+- Goals and Pledges: create/manage monthly, quarterly, yearly, installment, or one-off pledge goals.
 - Subscribers: list and manage contributors, add/edit/delete them.
 - Subscriber Details: search a subscriber by mobile number to see their goals and dues.
 - Pending: subscribers/goals with outstanding dues.
@@ -70,7 +70,7 @@ You can perform these actions directly using tools, instead of just explaining t
 - report_query: answers a read-only question from data already loaded (totals, dues, counts, plan info) — never a write.
 
 Rules for each tool:
-- create_goal: you must know whether it's monthly, yearly, or a one-off/event pledge. If the user didn't say, ASK them first in plain text — never assume "event" or any other default.
+- create_goal: you must know whether it's monthly, quarterly, yearly, installment, or a one-off/event pledge. If the user didn't say, ASK them first in plain text — never assume "event" or any other default. For "installment", you also need the number of installments (a whole number, 2 or more) — ask if not given.
 - collect_payment: you need a subscriber name (or mobile number) and an amount. If the user also names a specific goal, include goalName; if they don't mention one, simply omit goalName from the tool call — the app will show them their list of dues to pick from, so you must NOT ask which goal yourself or guess one.
 - add_subscriber: you need a name and mobile number. If the user doesn't also mention a goal, ask them once in plain text whether to just add the subscriber, or also subscribe them to a specific goal right away, and wait for their answer before calling the tool. If they do want them subscribed to a goal, you also need the amount that subscriber specifically owes per period for that goal — ask for it if not given, and never guess it or default to the goal's own target amount (a subscriber's due is per-person and usually different from the goal's overall target, which is also frequently unset).
 - subscribe_to_goal: needs a subscriber name, a goal name, AND the amount that subscriber specifically owes per period for that goal. This amount is never optional and must never default to the goal's own target amount — always ask if the user didn't state it.
@@ -101,7 +101,7 @@ You can ONLY perform the actions listed under "You can perform these actions dir
 
 For anything else (how something works, setup steps, general questions), answer directly instead of using a tool:
 
-How to create a goal manually: Sidebar -> "Goals and Pledges" -> click "New Goal" for a monthly or yearly goal (auto-renews each period) or "New Pledge Goal" for a one-off event (no renewal) -> enter a name and optional target amount -> Create.
+How to create a goal manually: Sidebar -> "Goals and Pledges" -> click "New Goal" for a monthly, quarterly, or yearly goal (auto-renews each period), "New Installment Goal" for a goal split into a fixed number of periods that stops renewing once they're all created, or "New Pledge Goal" for a one-off event (no renewal) -> enter a name and optional target amount -> Create.
 
 How to collect a payment manually: open the relevant goal or subscriber (or use the Pending tab) -> "Collect Payment" -> enter the amount -> Save. A receipt can then be shared via WhatsApp or SMS.
 
@@ -123,17 +123,18 @@ Rules for your replies:
 const TOOLS = [
   {
     name: 'create_goal',
-    description: 'Create a new contribution goal/pledge category. Use when the user asks to create, add, start, or set up a new goal, target, fund, or pledge collection, AND you already know whether it is monthly, yearly, or a one-off/event pledge.',
+    description: 'Create a new contribution goal/pledge category. Use when the user asks to create, add, start, or set up a new goal, target, fund, or pledge collection, AND you already know whether it is monthly, quarterly, yearly, installment, or a one-off/event pledge.',
     input_schema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'The name of the goal, exactly as the user said it (e.g. "Diwali Fund", "Cleaning Charges").' },
         category: {
           type: 'string',
-          enum: ['monthly', 'yearly', 'event'],
-          description: '"monthly" or "yearly" for a goal that repeats every period, "event" for a one-off pledge collection with no repeat. Must be explicitly known from what the user said — ask first if unclear, never default.'
+          enum: ['monthly', 'quarterly', 'yearly', 'installment', 'event'],
+          description: '"monthly"/"quarterly"/"yearly" for a goal that repeats every period indefinitely, "installment" for a goal split into a fixed number of periods (see totalInstallments) that auto-stops repeating once they\'re all created, "event" for a one-off pledge collection with no repeat. Must be explicitly known from what the user said — ask first if unclear, never default.'
         },
-        targetAmount: { type: 'number', description: 'Optional target amount in the account currency. Omit if not mentioned.' }
+        targetAmount: { type: 'number', description: 'Optional target amount in the account currency. Omit if not mentioned.' },
+        totalInstallments: { type: 'integer', description: 'Required when category is "installment": the total number of installments (periods) to split the goal into, a whole number of 2 or more. Ask the user if not given. Omit for every other category.' }
       },
       required: ['name', 'category']
     }

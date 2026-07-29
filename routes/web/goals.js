@@ -25,10 +25,20 @@ const router = express.Router();
 // moments earlier can't be silently lost.
 // ---------------------------------------------------------------
 router.post('/web-create-target', requireProToken, async (req, res) => {
-  const { name, category, targetAmount, rollover } = req.body;
+  const { name, category, targetAmount, totalInstallments } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
-  if (!['monthly', 'yearly', 'event'].includes(category)) {
-    return res.status(400).json({ error: "category must be 'monthly', 'yearly', or 'event'" });
+  if (!['monthly', 'quarterly', 'yearly', 'event', 'installment'].includes(category)) {
+    return res.status(400).json({ error: "category must be 'monthly', 'quarterly', 'yearly', 'event', or 'installment'" });
+  }
+  // Installment goals need a fixed number of periods to auto-stop after
+  // (see utils/rolloverEngine.js) — every other category either rolls over
+  // indefinitely (monthly/quarterly/yearly) or not at all (event).
+  let installmentCount;
+  if (category === 'installment') {
+    installmentCount = Number(totalInstallments);
+    if (!Number.isInteger(installmentCount) || installmentCount < 2) {
+      return res.status(400).json({ error: 'totalInstallments must be a whole number of 2 or more.' });
+    }
   }
 
   try {
@@ -42,12 +52,14 @@ router.post('/web-create-target', requireProToken, async (req, res) => {
 
     const targets = userData.targets || [];
 
-    // Monthly/yearly goals are dated from the moment they're created (e.g.
-    // "Cleaning Charges — July 2026") and roll over automatically at the end
-    // of their period — a new dated goal is created, every subscriber
-    // carries over, and any unpaid balance is added on top of their normal
-    // amount as an arrear (see utils/rolloverEngine.js). This repeats every
-    // period until the treasurer stops it via /web-stop-rollover, or
+    // Monthly/quarterly/yearly/installment goals are dated from the moment
+    // they're created (e.g. "Cleaning Charges — July 2026") and roll over
+    // automatically at the end of their period — a new dated goal is
+    // created, every subscriber carries over, and any unpaid balance is
+    // added on top of their normal amount as an arrear (see
+    // utils/rolloverEngine.js). This repeats every period until the
+    // treasurer stops it via /web-stop-rollover (or, for installment goals,
+    // automatically once totalInstallments periods have been created), or
     // manually completes/deletes the goal. Event goals don't roll over.
     const baseName = name.trim();
     let displayName = baseName;
@@ -56,11 +68,15 @@ router.post('/web-create-target', requireProToken, async (req, res) => {
       const periodKey = periodKeyForDate(new Date(), category);
       displayName = `${baseName} — ${periodLabel(periodKey, category)}`;
       rolloverFields = { rollover: true, rolloverBaseName: baseName, rolloverPeriodKey: periodKey };
+      if (category === 'installment') {
+        rolloverFields.totalInstallments = installmentCount;
+        rolloverFields.installmentsPaid = 1;
+      }
     }
 
     const newTarget = {
       // Prefixed with the owning pro user's own ID + a per-category code
-      // (gm/gy/ge/...), so this can never collide with another user's
+      // (gm/gq/gy/ge/gi/...), so this can never collide with another user's
       // goal id (see utils/idGen.js).
       id: await nextId(supabase, req.proUserId, category),
       name: displayName,
