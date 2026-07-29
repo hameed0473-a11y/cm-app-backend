@@ -18,20 +18,20 @@
 // Keep in sync with the backend's own enums (routes/web/expenses.js,
 // routes/web/tickets.js, lib/gateways.js) — duplicated here so the local
 // parser can validate/resolve without an extra round trip.
-const EXPENSE_CATEGORIES = ['Utility Bills', 'Staff Salaries', 'Maintenance', 'Cleaning', 'Office Expenses', 'Event Expenses', 'Construction & Renovation', 'Equipment Purchases', 'Charity Payments', 'Miscellaneous'];
+const EXPENSE_CATEGORIES = ['Utility Bills', 'Staff Salaries', 'Maintenance', 'Cleaning', 'Security', 'Office Expenses', 'Event Expenses', 'Religious Activities', 'Garden & Landscaping', 'Construction & Renovation', 'Equipment Purchases', 'Insurance & Legal', 'Taxes & Government Fees', 'Vehicle Expenses', 'Technology & Software', 'Charity Payments', 'Miscellaneous'];
 // Display/recognition names in each UI language, positionally paired with
 // EXPENSE_CATEGORIES above — matchExpenseCategory() accepts any language's
 // name but always returns the canonical English string, since that's what
 // the backend (routes/web/expenses.js) stores/expects.
 const EXPENSE_CATEGORY_TRANSLATIONS = {
   en: EXPENSE_CATEGORIES,
-  de: ['Nebenkosten', 'Personalgehälter', 'Wartung', 'Reinigung', 'Bürokosten', 'Veranstaltungskosten', 'Bau & Renovierung', 'Ausrüstungskäufe', 'Wohltätigkeitszahlungen', 'Sonstiges'],
-  fr: ['Factures de services', 'Salaires du personnel', 'Entretien', 'Nettoyage', 'Frais de bureau', 'Frais d\'événement', 'Construction et rénovation', 'Achats d\'équipement', 'Paiements caritatifs', 'Divers'],
-  es: ['Facturas de servicios', 'Salarios del personal', 'Mantenimiento', 'Limpieza', 'Gastos de oficina', 'Gastos de eventos', 'Construcción y renovación', 'Compras de equipo', 'Pagos de caridad', 'Varios'],
-  ar: ['فواتير الخدمات', 'رواتب الموظفين', 'الصيانة', 'التنظيف', 'مصاريف المكتب', 'مصاريف الفعاليات', 'البناء والتجديد', 'شراء المعدات', 'مدفوعات خيرية', 'متفرقات'],
-  ru: ['Коммунальные платежи', 'Зарплаты персонала', 'Обслуживание', 'Уборка', 'Офисные расходы', 'Расходы на мероприятия', 'Строительство и ремонт', 'Покупка оборудования', 'Благотворительные платежи', 'Разное'],
-  pt: ['Contas de serviços', 'Salários da equipe', 'Manutenção', 'Limpeza', 'Despesas de escritório', 'Despesas de eventos', 'Construção e reforma', 'Compras de equipamentos', 'Pagamentos de caridade', 'Diversos'],
-  zh: ['水电费', '员工工资', '维护', '清洁', '办公费用', '活动费用', '建筑与翻新', '设备采购', '慈善捐款', '其他']
+  de: ['Nebenkosten', 'Personalgehälter', 'Wartung', 'Reinigung', 'Sicherheit', 'Bürokosten', 'Veranstaltungskosten', 'Religiöse Aktivitäten', 'Garten & Landschaftsbau', 'Bau & Renovierung', 'Ausrüstungskäufe', 'Versicherung & Recht', 'Steuern & Behördengebühren', 'Fahrzeugkosten', 'Technologie & Software', 'Wohltätigkeitszahlungen', 'Sonstiges'],
+  fr: ['Factures de services', 'Salaires du personnel', 'Entretien', 'Nettoyage', 'Sécurité', 'Frais de bureau', 'Frais d\'événement', 'Activités religieuses', 'Jardin et aménagement paysager', 'Construction et rénovation', 'Achats d\'équipement', 'Assurance et juridique', 'Impôts et frais gouvernementaux', 'Frais de véhicule', 'Technologie et logiciels', 'Paiements caritatifs', 'Divers'],
+  es: ['Facturas de servicios', 'Salarios del personal', 'Mantenimiento', 'Limpieza', 'Seguridad', 'Gastos de oficina', 'Gastos de eventos', 'Actividades religiosas', 'Jardín y paisajismo', 'Construcción y renovación', 'Compras de equipo', 'Seguros y legal', 'Impuestos y tasas gubernamentales', 'Gastos de vehículo', 'Tecnología y software', 'Pagos de caridad', 'Varios'],
+  ar: ['فواتير الخدمات', 'رواتب الموظفين', 'الصيانة', 'التنظيف', 'الأمن', 'مصاريف المكتب', 'مصاريف الفعاليات', 'الأنشطة الدينية', 'الحدائق وتنسيق المناظر الطبيعية', 'البناء والتجديد', 'شراء المعدات', 'التأمين والشؤون القانونية', 'الضرائب والرسوم الحكومية', 'مصاريف المركبات', 'التقنية والبرمجيات', 'مدفوعات خيرية', 'متفرقات'],
+  ru: ['Коммунальные платежи', 'Зарплаты персонала', 'Обслуживание', 'Уборка', 'Безопасность', 'Офисные расходы', 'Расходы на мероприятия', 'Религиозная деятельность', 'Сад и благоустройство', 'Строительство и ремонт', 'Покупка оборудования', 'Страхование и юридические услуги', 'Налоги и государственные сборы', 'Расходы на транспорт', 'Технологии и ПО', 'Благотворительные платежи', 'Разное'],
+  pt: ['Contas de serviços', 'Salários da equipe', 'Manutenção', 'Limpeza', 'Segurança', 'Despesas de escritório', 'Despesas de eventos', 'Atividades religiosas', 'Jardim e paisagismo', 'Construção e reforma', 'Compras de equipamentos', 'Seguro e jurídico', 'Impostos e taxas governamentais', 'Despesas com veículos', 'Tecnologia e software', 'Pagamentos de caridade', 'Diversos'],
+  zh: ['水电费', '员工工资', '维护', '清洁', '安保', '办公费用', '活动费用', '宗教活动', '花园与园艺', '建筑与翻新', '设备采购', '保险与法律', '税费与政府费用', '车辆费用', '技术与软件', '慈善捐款', '其他']
 };
 
 function expenseCategoryNames() {

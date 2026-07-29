@@ -76,7 +76,7 @@ Rules for each tool:
 - subscribe_to_goal: needs a subscriber name, a goal name, AND the amount that subscriber specifically owes per period for that goal. This amount is never optional and must never default to the goal's own target amount — always ask if the user didn't state it.
 - create_pledge: needs a subscriber name, goal name, and amount.
 - mark_goal_complete / stop_rollover: need only the goal name.
-- add_expense: needs an amount and a category from this exact list: Utility Bills, Staff Salaries, Maintenance, Cleaning, Office Expenses, Event Expenses, Construction & Renovation, Equipment Purchases, Charity Payments, Miscellaneous. Ask if the user's wording doesn't clearly match one of these.
+- add_expense: needs an amount and a category from this exact list: Utility Bills, Staff Salaries, Maintenance, Cleaning, Security, Office Expenses, Event Expenses, Religious Activities, Garden & Landscaping, Construction & Renovation, Equipment Purchases, Insurance & Legal, Taxes & Government Fees, Vehicle Expenses, Technology & Software, Charity Payments, Miscellaneous. Ask if the user's wording doesn't clearly match one of these.
 - add_payee: needs a name, mobile number, and a category from that same list.
 - raise_ticket: needs a category (one of: billing, collection, receipt_pdf, import_subscribers, other — default to "other" if unclear, this one is low-stakes) and a short description.
 - reopen_ticket: no parameters — always reopens the account's own last solved ticket. Never ask which ticket; there is only ever one target.
@@ -218,7 +218,7 @@ const TOOLS = [
         amount: { type: 'number', description: 'The expense amount.' },
         category: {
           type: 'string',
-          enum: ['Utility Bills', 'Staff Salaries', 'Maintenance', 'Cleaning', 'Office Expenses', 'Event Expenses', 'Construction & Renovation', 'Equipment Purchases', 'Charity Payments', 'Miscellaneous'],
+          enum: ['Utility Bills', 'Staff Salaries', 'Maintenance', 'Cleaning', 'Security', 'Office Expenses', 'Event Expenses', 'Religious Activities', 'Garden & Landscaping', 'Construction & Renovation', 'Equipment Purchases', 'Insurance & Legal', 'Taxes & Government Fees', 'Vehicle Expenses', 'Technology & Software', 'Charity Payments', 'Miscellaneous'],
           description: 'Must be exactly one of the listed categories — ask the user to pick one if their wording is unclear.'
         },
         description: { type: 'string', description: 'Optional short description of what the expense was for.' }
@@ -236,7 +236,7 @@ const TOOLS = [
         mobile: { type: 'string', description: "The payee's mobile number." },
         category: {
           type: 'string',
-          enum: ['Utility Bills', 'Staff Salaries', 'Maintenance', 'Cleaning', 'Office Expenses', 'Event Expenses', 'Construction & Renovation', 'Equipment Purchases', 'Charity Payments', 'Miscellaneous'],
+          enum: ['Utility Bills', 'Staff Salaries', 'Maintenance', 'Cleaning', 'Security', 'Office Expenses', 'Event Expenses', 'Religious Activities', 'Garden & Landscaping', 'Construction & Renovation', 'Equipment Purchases', 'Insurance & Legal', 'Taxes & Government Fees', 'Vehicle Expenses', 'Technology & Software', 'Charity Payments', 'Miscellaneous'],
           description: 'Must be exactly one of the listed categories — ask the user to pick one if their wording is unclear.'
         }
       },

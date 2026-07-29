@@ -19,8 +19,10 @@ const router = express.Router();
 // ===============================================================
 
 const EXPENSE_CATEGORIES = [
-  'Utility Bills', 'Staff Salaries', 'Maintenance', 'Cleaning', 'Office Expenses',
-  'Event Expenses', 'Construction & Renovation', 'Equipment Purchases', 'Charity Payments', 'Miscellaneous'
+  'Utility Bills', 'Staff Salaries', 'Maintenance', 'Cleaning', 'Security', 'Office Expenses',
+  'Event Expenses', 'Religious Activities', 'Garden & Landscaping', 'Construction & Renovation',
+  'Equipment Purchases', 'Insurance & Legal', 'Taxes & Government Fees', 'Vehicle Expenses',
+  'Technology & Software', 'Charity Payments', 'Miscellaneous'
 ];
 
 // --- Add an expense ---
