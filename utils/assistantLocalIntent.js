@@ -57,7 +57,7 @@ const ROOT_MENU_TEXT = {
 const ROOT_OPTION_KEYWORDS = {
   en: { 1: /\bgoals?\b/i, 2: /\bsubscribers?\b/i, 3: /\bpending\b|\bmissed\b/i, 4: /\baccounting\b|\baccounts?\b/i, 5: /\b(something else|not covered|other|claude|ai)\b/i },
   de: { 1: /\bziele?\b/i, 2: /\babonnent(en)?\b/i, 3: /\bverpasst\b|\bausstehend\b/i, 4: /\bbuchhaltung\b/i, 5: /\b(sonstiges|etwas anderes|andere|claude|ai)\b/i },
-  fr: { 1: /\bobjectifs?\b/i, 2: /\babonn[ée]s?\b/i, 3: /\bmanqu[ée]s?\b|\battente\b/i, 4: /\bcomptabilit[ée]\b/i, 5: /\b(autre chose|autre|claude|ai)\b/i },
+  fr: { 1: /\bobjectifs?\b/i, 2: /\babonn[ée]s?(?!\w)/i, 3: /\bmanqu[ée]s?(?!\w)|\battente\b/i, 4: /\bcomptabilit[ée](?!\w)/i, 5: /\b(autre chose|autre|claude|ai)\b/i },
   es: { 1: /\bmetas?\b/i, 2: /\bsuscriptor(es)?\b/i, 3: /\bpendientes?\b|\bperdidos?\b/i, 4: /\bcontabilidad\b/i, 5: /\b(otra cosa|otro|claude|ai)\b/i },
   ar: { 1: /الأهداف|هدف/, 2: /مشترك/, 3: /فائت|معلق|معلّق/, 4: /محاسبة/, 5: /أخرى|claude|ai/i },
   ru: { 1: /цел(и|ь)/i, 2: /подписчик/i, 3: /пропущено|ожидает/i, 4: /бухгалтери/i, 5: /другое|claude|ai/i },
@@ -67,6 +67,63 @@ const ROOT_OPTION_KEYWORDS = {
 
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Compiles a '{token}' template string into a render function (fills the
+// tokens for display) and an exec function (recognizes the SAME question
+// coming back as the assistant's own prior message, extracting whatever
+// was embedded in it — e.g. a name mentioned earlier in the flow). Used
+// throughout the deeper multi-turn flows below so each one only has to
+// state its questions once per language rather than hand-writing a
+// capture-group regex per phrasing. Compiled fresh on each call — fine at
+// this call volume (a chat backend, not a hot loop).
+function compileTemplate(template) {
+  const tokens = [];
+  const pattern = escapeRegExp(template).replace(/\\\{(\w+)\\\}/g, (_, key) => {
+    tokens.push(key);
+    return '(.+?)';
+  });
+  const regex = new RegExp(`^${pattern}$`, 'i');
+  return {
+    render: (params) => template.replace(/\{(\w+)\}/g, (_, key) => (params && params[key] != null ? params[key] : '')),
+    test: (text) => regex.test(text),
+    exec: (text) => {
+      const m = text.match(regex);
+      if (!m) return null;
+      const result = {};
+      tokens.forEach((t, i) => { result[t] = m[i + 1]; });
+      return result;
+    }
+  };
+}
+
+// Renders a flow question in the current request's language (falls back to
+// English if that key is missing for some reason).
+function renderFlow(table, key, params) {
+  const t = table[currentLang] || table.en;
+  return compileTemplate(t[key]).render(params);
+}
+
+// Tests whether `text` is ANY language's version of this flow question —
+// used for the "is this flow currently active" marker checks, so a session
+// that started in one language still recognizes its own question even in
+// an edge case where the language setting changed mid-flow.
+function testFlowAnyLang(table, key, text) {
+  return Object.values(table).some(t => t[key] && compileTemplate(t[key]).test(text));
+}
+
+// Extracts embedded values from `text` assuming it's this flow's question
+// — tries currentLang first (the common case), then falls back to every
+// other language for robustness (see testFlowAnyLang).
+function execFlowAnyLang(table, key, text) {
+  const order = [currentLang, ...Object.keys(table).filter(l => l !== currentLang)];
+  for (const l of order) {
+    const t = table[l];
+    if (!t || !t[key]) continue;
+    const r = compileTemplate(t[key]).exec(text);
+    if (r) return r;
+  }
+  return null;
 }
 
 function rootMenuQuestion(lang) {
@@ -92,10 +149,15 @@ function extractAmount(msg) {
 
 // No default here on purpose — a missing/unclear category means the AI
 // (local or Claude) must ask, never silently assume "event".
+// Recognizes the goal-type words in any of the 8 UI languages, not just
+// English — a French/Chinese/etc. reply to "monthly, yearly, or pledge?"
+// needs to resolve to the same 'monthly'/'yearly'/'event' category value
+// the rest of the app already uses, regardless of what language it's typed
+// in (this doesn't need to know currentLang — just recognize the word).
 function extractCategory(msg) {
-  if (/\bmonthly\b/i.test(msg)) return 'monthly';
-  if (/\byearly\b|\bannual(?:ly)?\b/i.test(msg)) return 'yearly';
-  if (/\bevent\b|\bone[- ]?off\b|\bpledge\b/i.test(msg)) return 'event';
+  if (/\bmonthly\b|\bmonatlich\b|\bmensuel(?:le)?\b|\bmensual(?:es)?\b|شهري|ежемесячн|\bmensal(?:is)?\b|月度|每月/i.test(msg)) return 'monthly';
+  if (/\byearly\b|\bannual(?:ly)?\b|\bjährlich\b|\bannuel(?:le)?\b|\banual(?:es)?\b|سنوي|ежегодн|年度|每年/i.test(msg)) return 'yearly';
+  if (/\bevent\b|\bone[- ]?off\b|\bpledge\b|\beinmalig\w*\b|\bzusage\b|\bponctuel(?:le)?\b|\bpromesse\b|\búnic[oa]\b|\bpromesa\b|مرة واحدة|تعهد|разов|обещани|\bpromessa\b|一次性|认捐/i.test(msg)) return 'event';
   return null;
 }
 
@@ -124,14 +186,24 @@ function extractNameMobile(msg, keyword) {
   return { name, mobile };
 }
 
+// The "at <amount>" preposition, in any of the 8 UI languages (the
+// examples this file's flow questions give users — "Diwali Fund at 500",
+// "Fondo Diwali a 500", "Diwali-Fonds mit 500" — all need to parse back
+// out correctly regardless of which language example the user followed).
+const AT_WORD_RE = '(?:at|bei|mit|à|a|com|por|по|на|ب|بـ)';
+
 // A subscriber's per-goal amount is the recurring due THEY are on the hook
 // for each period, not the goal's own (often unset) overall target — so
 // every place that subscribes someone to a goal must get this explicitly
 // from the user, via "... at 500", never default or guess it. Strips a
 // trailing "at <amount>" clause so the remaining text (goal name, etc.)
-// parses cleanly, and reports whichever amount it found either way.
+// parses cleanly, and reports whichever amount it found either way. Falls
+// back to a plain trailing number with NO preposition at all (e.g. "Diwali
+// Fund 500") since Chinese in particular doesn't use a connector word here.
 function stripTrailingAmount(msg) {
-  const m = msg.match(/^(.*?)\s+\bat\s+(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)(?:\s*(?:per\s*(?:month|year|period))?)?[.?!]*$/i);
+  let m = msg.match(new RegExp(`^(.*?)\\s+${AT_WORD_RE}\\s+(?:rs\\.?|inr|₹|\\$|£|€)?\\s*(\\d+(?:\\.\\d+)?)(?:\\s*(?:per\\s*(?:month|year|period))?)?[.?!]*$`, 'i'));
+  if (m) return { rest: m[1].trim(), amount: Number(m[2]) || 0 };
+  m = msg.match(/^(.+?)[\s,，]+(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)[.?!]*$/i);
   if (m) return { rest: m[1].trim(), amount: Number(m[2]) || 0 };
   return { rest: msg, amount: extractAmount(msg) };
 }
@@ -140,7 +212,7 @@ function stripTrailingAmount(msg) {
 // our own "how much should X pay?" question) — accepts a bare number, an
 // "at <number>" reply, or a currency-prefixed one.
 function extractBareOrAtAmount(msg) {
-  const m = msg.trim().match(/^(?:at\s+)?(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)\s*(?:per\s*(?:month|year|period))?[.?!]*$/i);
+  const m = msg.trim().match(new RegExp(`^(?:${AT_WORD_RE}\\s+)?(?:rs\\.?|inr|₹|\\$|£|€)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:per\\s*(?:month|year|period))?[.?!]*$`, 'i'));
   if (m) return Number(m[1]) || 0;
   return extractAmount(msg);
 }
@@ -169,19 +241,40 @@ function matchCurrency(text) {
 // answering a yes/no question. It's checked separately, and earlier (from
 // parseLocalIntent, via cancelCreateGoalIfPending below), than the
 // top-level delete/remove intent check would otherwise swallow "cancel".
-const AFFIRMATIVE_RE = /^\s*(yes|yeah|yep|yup|correct|right|sure|ok(?:ay)?|confirm|go ahead|please do)\b/i;
-const CANCEL_RE = /^\s*(no|nope|nah|never ?mind|don'?t|cancel|stop|back|exit|forget it)\b/i;
+// Recognizes yes/no/cancel replies in any of the 8 UI languages — like
+// extractCategory, this doesn't need currentLang: whichever language the
+// user actually typed/spoke in should be recognized. \b only applies to
+// the Latin-script alternatives (Cyrillic/Arabic/CJK aren't in \w, so \b
+// silently fails to match around them — see the fix earlier for the menu
+// keyword tables).
+const AFFIRMATIVE_RE = /^\s*(?:(?:yes|yeah|yep|yup|correct|right|sure|ok(?:ay)?|confirm|go ahead|please do|ja|jawohl|klar|genau|richtig|bestätigen|oui|ouais|exact|d'accord|vas-y|si|claro|vale|correcto|confirmar|adelante|sim|certo|vai)\b|sí|да|ага|верно|точно|ладно|хорошо|подтвердить|давай|نعم|أجل|تمام|صحيح|أكد|تفضل|是|对|好的|确认|没问题|继续)/i;
+const CANCEL_RE = /^\s*(?:(?:no|nope|nah|never ?mind|don'?t|cancel|stop|back|exit|forget it|nein|abbrechen|stopp|zurück|raus|egal|vergiss es|non|laisse tomber|annuler|arrête|retour|sortir|olvídalo|cancelar|detener|atrás|salir|não|esquece|parar|voltar|sair)\b|нет|забудь|отмена|стоп|назад|выход|لا|انسَ الأمر|إلغاء|توقف|رجوع|خروج|不|算了|取消|停止|返回|退出)/i;
 // A bare greeting with nothing else — answered locally (see parseLocalIntent)
 // instead of spending a Claude call on "hi"/"hello" alone.
-const GREETING_RE = /^\s*(hi+|hello+|hey+|hola|good\s?morning|good\s?afternoon|good\s?evening)\s*[.!]*$/i;
+const GREETING_RE = /^\s*(hi+|hello+|hey+|hola|good\s?morning|good\s?afternoon|good\s?evening|hallo|guten\s?morgen|guten\s?tag|guten\s?abend|bonjour|salut|bonsoir|buenos\s?días|buenas\s?tardes|buenas\s?noches|привет|здравствуйте|добрый\s?день|доброе\s?утро|добрый\s?вечер|مرحبا|أهلا|السلام\s?عليكم|صباح\s?الخير|مساء\s?الخير|olá|oi|bom\s?dia|boa\s?tarde|boa\s?noite|你好|您好|早上好|下午好|晚上好)\s*[.!]*$/i;
 
 // The three questions the create-goal flow asks, in order — recognized on
 // the assistant's own prior message so a short follow-up reply ("yes", a
 // bare goal name, or "monthly") can be understood without repeating the
 // whole request, same pattern as every other multi-turn flow in this file.
-const CREATE_GOAL_CONFIRM_RE = /are you saying you'd like to create a new goal/i;
-const CREATE_GOAL_NAME_RE = /^great — what should the goal be named\?$/i;
-const CREATE_GOAL_TYPE_RE = /what type of goal is "([^"]+)"/i;
+// Localized to all 8 UI languages via CREATE_GOAL_TEXT + compileTemplate;
+// CREATE_GOAL_CONFIRM_RE/NAME_RE stay plain combined regexes (no embedded
+// dynamic value), CREATE_GOAL_TYPE_RE is a duck-typed { test } object since
+// its question embeds the goal name — extraction happens via
+// execFlowAnyLang inside parseCreateGoal itself, this only needs .test().
+const CREATE_GOAL_TEXT = {
+  en: { confirm: 'Are you saying you\'d like to create a new goal?', askName: 'Great — what should the goal be named?', askNameEmpty: 'What should the goal be named?', askType: 'What type of goal is "{name}" — monthly, yearly, or a one-off/event pledge?', typeRetry: 'Sorry, I didn\'t catch the type — is "{name}" a monthly goal, a yearly goal, or a one-off/event pledge?' },
+  de: { confirm: 'Möchten Sie ein neues Ziel erstellen?', askName: 'Gut — wie soll das Ziel heißen?', askNameEmpty: 'Wie soll das Ziel heißen?', askType: 'Welcher Zieltyp ist "{name}" — monatlich, jährlich oder eine einmalige Zusage?', typeRetry: 'Entschuldigung, ich habe den Typ nicht verstanden — ist "{name}" ein monatliches Ziel, ein jährliches Ziel oder eine einmalige Zusage?' },
+  fr: { confirm: 'Voulez-vous dire que vous souhaitez créer un nouvel objectif ?', askName: 'Très bien — comment doit s\'appeler l\'objectif ?', askNameEmpty: 'Comment doit s\'appeler l\'objectif ?', askType: 'Quel type d\'objectif est "{name}" — mensuel, annuel, ou une promesse ponctuelle ?', typeRetry: 'Désolé, je n\'ai pas compris le type — "{name}" est-il un objectif mensuel, annuel, ou une promesse ponctuelle ?' },
+  es: { confirm: '¿Quieres decir que te gustaría crear una nueva meta?', askName: 'Genial — ¿cómo debería llamarse la meta?', askNameEmpty: '¿Cómo debería llamarse la meta?', askType: '¿Qué tipo de meta es "{name}" — mensual, anual, o una promesa única?', typeRetry: 'Lo siento, no entendí el tipo — ¿es "{name}" una meta mensual, anual, o una promesa única?' },
+  ar: { confirm: 'هل تقصد أنك تريد إنشاء هدف جديد؟', askName: 'رائع — ما الاسم الذي تريده للهدف؟', askNameEmpty: 'ما الاسم الذي تريده للهدف؟', askType: 'ما نوع الهدف "{name}" — شهري، سنوي، أم تعهد لمرة واحدة؟', typeRetry: 'عذرًا، لم أفهم النوع — هل "{name}" هدف شهري، سنوي، أم تعهد لمرة واحدة؟' },
+  ru: { confirm: 'Вы хотите создать новую цель?', askName: 'Отлично — как назвать цель?', askNameEmpty: 'Как назвать цель?', askType: 'Какой тип у цели «{name}» — ежемесячная, ежегодная или разовое обещание?', typeRetry: 'Извините, я не понял тип — «{name}» это ежемесячная цель, ежегодная, или разовое обещание?' },
+  pt: { confirm: 'Você gostaria de criar uma nova meta?', askName: 'Ótimo — como a meta deve se chamar?', askNameEmpty: 'Como a meta deve se chamar?', askType: 'Que tipo de meta é "{name}" — mensal, anual, ou uma promessa única?', typeRetry: 'Desculpe, não entendi o tipo — "{name}" é uma meta mensal, anual, ou uma promessa única?' },
+  zh: { confirm: '您是想创建一个新目标吗？', askName: '好的 — 这个目标叫什么名字？', askNameEmpty: '这个目标叫什么名字？', askType: '"{name}"是什么类型的目标 — 月度、年度，还是一次性认捐？', typeRetry: '抱歉，我没听清类型 — "{name}"是月度目标、年度目标，还是一次性认捐？' }
+};
+const CREATE_GOAL_CONFIRM_RE = new RegExp(Object.values(CREATE_GOAL_TEXT).map(t => escapeRegExp(t.confirm)).join('|'), 'i');
+const CREATE_GOAL_NAME_RE = new RegExp(Object.values(CREATE_GOAL_TEXT).map(t => `^${escapeRegExp(t.askName)}$`).join('|'), 'i');
+const CREATE_GOAL_TYPE_RE = { test: (text) => testFlowAnyLang(CREATE_GOAL_TEXT, 'askType', text) };
 
 // Registry of every question regex belonging to a confirm-first multi-turn
 // flow — each flow pushes its own step markers onto this array right after
@@ -195,17 +288,32 @@ const PENDING_FLOW_MARKERS = [CREATE_GOAL_CONFIRM_RE, CREATE_GOAL_NAME_RE, CREAT
 // to that specific question (not an abort) — e.g. "no goal, just add them"
 // — so only stricter, unambiguous cancel wording backs out of those steps.
 // Flows push their own such markers on right after defining them.
-const STRICT_ABORT_RE = /^\s*(cancel|stop|never ?mind|forget it|exit|back)\b/i;
+const STRICT_ABORT_RE = /^\s*(?:(?:cancel|stop|never ?mind|forget it|exit|back|abbrechen|stopp|zurück|raus|annuler|arrête|retour|sortir|cancelar|detener|atrás|salir|parar|voltar|sair)\b|отмена|стоп|назад|выход|إلغاء|توقف|رجوع|خروج|取消|停止|返回|退出)/i;
 const PENDING_FLOW_STRICT_ABORT_MARKERS = [];
+
+const CANCELLED_TEXT = {
+  en: 'No problem — cancelled. Let me know if there\'s something else I can help with.',
+  de: 'Kein Problem — abgebrochen. Sagen Sie mir, wenn ich sonst noch helfen kann.',
+  fr: 'Pas de problème — annulé. Dites-moi si je peux vous aider avec autre chose.',
+  es: 'Sin problema — cancelado. Avísame si puedo ayudarte con algo más.',
+  ar: 'لا مشكلة — تم الإلغاء. أخبرني إذا كان بإمكاني مساعدتك في شيء آخر.',
+  ru: 'Без проблем — отменено. Дайте знать, если нужна ещё какая-то помощь.',
+  pt: 'Sem problemas — cancelado. Me avise se eu puder ajudar com mais alguma coisa.',
+  zh: '没问题 — 已取消。如果还有什么需要帮忙的，请告诉我。'
+};
+
+function cancelledText() {
+  return CANCELLED_TEXT[currentLang] || CANCELLED_TEXT.en;
+}
 
 function cancelPendingFlowIfAny(msg, history) {
   const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
   if (!lastAssistant) return null;
   if (PENDING_FLOW_MARKERS.some(re => re.test(lastAssistant.content)) && CANCEL_RE.test(msg)) {
-    return { reply: 'No problem — cancelled. Let me know if there\'s something else I can help with.', handled: true };
+    return { reply: cancelledText(), handled: true };
   }
   if (PENDING_FLOW_STRICT_ABORT_MARKERS.some(re => re.test(lastAssistant.content)) && STRICT_ABORT_RE.test(msg)) {
-    return { reply: 'No problem — cancelled. Let me know if there\'s something else I can help with.', handled: true };
+    return { reply: cancelledText(), handled: true };
   }
   return null;
 }
@@ -214,7 +322,7 @@ function cancelPendingFlowIfAny(msg, history) {
 // for an explanation, not asking us to actually create one — must not
 // trigger the confirm-first flow below (it used to, since it also contains
 // "create" + "goal").
-const HOW_TO_RE = /\bhow\s+(?:do|does|can|to)\b/i;
+const HOW_TO_RE = /\bhow\s+(?:do|does|can|to)\b|\bwie\s+(?:kann|geht|mache)|\bcomment\s+(?:faire|puis-je)|\bcómo\s+(?:hago|puedo)|كيف|как|\bcomo\s+(?:faço|posso)|如何|怎么/i;
 
 // A fast-path regex capturing "whatever comes before/after a trigger word"
 // can accidentally capture generic filler ("a goal", "the", "the goal")
@@ -230,6 +338,12 @@ const GENERIC_GOAL_WORDS_RE = /^(?:a|the|this|that|my|our|it)\s*(?:goal)?$/i;
 // user to confirm before assuming anything — cheap to correct if wrong,
 // since nothing is proposed/created until they say yes twice more (goal
 // name, then type) and finally confirm the actual create_goal action card.
+// Localized equivalents of the category words this flow strips back out of
+// a name once a type has been detected in it (e.g. "Water Fund, monthly" ->
+// name "Water Fund", category 'monthly') — mirrors extractCategory's word
+// list so cleanup works regardless of which language the type was typed in.
+const CATEGORY_WORDS_STRIP_RE = /\b(monthly|yearly|annual(?:ly)?|event|one[- ]?off|pledge|monatlich|jährlich|einmalig\w*|zusage|mensuel(?:le)?|annuel(?:le)?|ponctuel(?:le)?|promesse|mensual(?:es)?|anual(?:es)?|únic[oa]|promesa|mensal(?:is)?|anual|promessa)\b|شهري|سنوي|مرة واحدة|تعهد|ежемесячн\w*|ежегодн\w*|разов\w*|обещани\w*|月度|每月|年度|每年|一次性|认捐/gi;
+
 function parseCreateGoal(msg, history) {
   const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
 
@@ -237,10 +351,11 @@ function parseCreateGoal(msg, history) {
   // (a "cancel"/"stop"/etc. reply here is already handled earlier, by
   // cancelPendingFlowIfAny in parseLocalIntent, before this is even reached)
   if (lastAssistant && CREATE_GOAL_TYPE_RE.test(lastAssistant.content)) {
-    const name = lastAssistant.content.match(CREATE_GOAL_TYPE_RE)[1];
+    const extracted = execFlowAnyLang(CREATE_GOAL_TEXT, 'askType', lastAssistant.content);
+    const name = extracted ? extracted.name : '';
     const category = extractCategory(msg);
     if (!category) {
-      return { reply: `Sorry, I didn't catch the type — is "${name}" a monthly goal, a yearly goal, or a one-off/event pledge?`, handled: true };
+      return { reply: renderFlow(CREATE_GOAL_TEXT, 'typeRetry', { name }), handled: true };
     }
     return {
       reply: 'Here\'s what I understood:',
@@ -258,17 +373,17 @@ function parseCreateGoal(msg, history) {
   if (lastAssistant && CREATE_GOAL_NAME_RE.test(lastAssistant.content)) {
     let name = msg.replace(/^(?:it'?s|its|name it|call it|named?)\s+/i, '').replace(/[.?!]+$/, '').trim();
     name = name.replace(/\s+(?:target|amount|for)\s*(?:of)?\s*(?:rs\.?|inr|₹|\$|£|€)?\s*\d+(?:\.\d+)?\s*$/i, '').trim();
-    if (!name) return { reply: 'What should the goal be named?', handled: true };
+    if (!name) return { reply: renderFlow(CREATE_GOAL_TEXT, 'askNameEmpty'), handled: true };
     const category = extractCategory(name);
     if (category) {
-      name = name.replace(/\b(monthly|yearly|annual(?:ly)?|event|one[- ]?off|pledge)\b/gi, '').replace(/[,\s]+$/, '').replace(/\s{2,}/g, ' ').trim();
+      name = name.replace(CATEGORY_WORDS_STRIP_RE, '').replace(/[,\s]+$/, '').replace(/\s{2,}/g, ' ').trim();
       return {
         reply: 'Here\'s what I understood:',
         action: { type: 'create_goal', params: { name, category, targetAmount: 0 } },
         handled: true
       };
     }
-    return { reply: `What type of goal is "${name}" — monthly, yearly, or a one-off/event pledge?`, handled: true };
+    return { reply: renderFlow(CREATE_GOAL_TEXT, 'askType', { name }), handled: true };
   }
 
   // Step 2: answering "are you saying you'd like to create a new goal?"
@@ -276,16 +391,17 @@ function parseCreateGoal(msg, history) {
   // that isn't a recognizable "yes" just falls through to other intents)
   if (lastAssistant && CREATE_GOAL_CONFIRM_RE.test(lastAssistant.content)) {
     if (!AFFIRMATIVE_RE.test(msg)) return null;
-    return { reply: 'Great — what should the goal be named?', handled: true };
+    return { reply: renderFlow(CREATE_GOAL_TEXT, 'askName'), handled: true };
   }
 
   // Step 1: first mention — a keyword hit only, nothing is assumed yet.
   // Skipped for "how do I .../how to ..." questions, which want an
   // explanation (see the FAQ below), not to actually create anything.
   const wantsCreateGoal = !HOW_TO_RE.test(msg)
-    && /\b(create|add|start|set ?up|make)\b/i.test(msg) && /\b(goal|target|fund|pledge)\b/i.test(msg);
+    && /\b(create|add|start|set ?up|make)\b|erstell|anlegen|hinzufüg|\bcré|\bajout|\bcommenc|\bcrear\b|\bagregar\b|\biniciar\b|إنشاء|إضافة|بدء|созда|добав|начать|\bcriar\b|\biniciar\b|创建|添加|开始/i.test(msg)
+    && /\b(goal|target|fund|pledge)\b|\bziel\b|\bfonds\b|\bzusage\b|\bobjectif\b|\bfonds\b|\bpromesse\b|\bmeta\b|\bfondo\b|\bpromesa\b|هدف|صندوق|تعهد|цель|фонд|обещани|\bmeta\b|\bfundo\b|\bpromessa\b|目标|基金|认捐/i.test(msg);
   if (wantsCreateGoal) {
-    return { reply: 'Are you saying you\'d like to create a new goal?', handled: true };
+    return { reply: renderFlow(CREATE_GOAL_TEXT, 'confirm'), handled: true };
   }
 
   return null;
@@ -294,21 +410,38 @@ function parseCreateGoal(msg, history) {
 // The steps this flow asks, in order. Each question embeds whatever it
 // already knows (name, then also mobile, then also goal) directly in its
 // own text — recovered from there rather than re-scanning history, same
-// approach as create_goal's CREATE_GOAL_TYPE_RE.
-const ADD_SUBSCRIBER_CONFIRM_RE = /are you saying you'd like to add a new subscriber/i;
-const ADD_SUBSCRIBER_NAME_RE = /^great — what's the subscriber's name\?$/i;
-const ADD_SUBSCRIBER_MOBILE_RE = /^what's (.+?)'s mobile number\?$/i;
-const ADD_SUBSCRIBER_GOAL_OR_NOT_RE = /should i add (.+?) \(mobile (\d+)\) as a general subscriber only, or also subscribe them to a specific goal/i;
-const ADD_SUBSCRIBER_AMOUNT_RE = /how much should (.+?) \(mobile (\d+)\) pay per period for "([^"]+)"/i;
+// approach as create_goal's CREATE_GOAL_TYPE_RE. Localized to all 8 UI
+// languages via ADD_SUBSCRIBER_TEXT + compileTemplate. The "ask amount"
+// question is unified to one wording used both the first time it's asked
+// (after a goal name with no amount) and on retry (amount not understood)
+// — the English original varied the example slightly between those two;
+// simplified to one template to keep this tractable across 8 languages.
+const ADD_SUBSCRIBER_TEXT = {
+  en: { confirm: 'Are you saying you\'d like to add a new subscriber?', askName: 'Great — what\'s the subscriber\'s name?', askNameEmpty: 'What\'s the subscriber\'s name?', askMobile: 'What\'s {name}\'s mobile number?', goalOrNot: 'Got it — should I add {name} (mobile {mobile}) as a general subscriber only, or also subscribe them to a specific goal right away? Reply "just add" or say the goal name and their per-period amount, e.g. "Diwali Fund at 500".', askAmount: 'How much should {name} (mobile {mobile}) pay per period for "{goalName}"? Reply e.g. "500".' },
+  de: { confirm: 'Möchten Sie einen neuen Abonnenten hinzufügen?', askName: 'Gut — wie heißt der Abonnent?', askNameEmpty: 'Wie heißt der Abonnent?', askMobile: 'Wie lautet die Mobilnummer von {name}?', goalOrNot: 'Verstanden — soll ich {name} (Mobil {mobile}) nur als allgemeinen Abonnenten hinzufügen, oder ihn/sie auch gleich einem bestimmten Ziel zuordnen? Antworten Sie mit "nur hinzufügen" oder nennen Sie den Zielnamen und den Betrag pro Zeitraum, z. B. "Diwali-Fonds mit 500".', askAmount: 'Wie viel soll {name} (Mobil {mobile}) pro Zeitraum für "{goalName}" zahlen? Antworten Sie z. B. mit "500".' },
+  fr: { confirm: 'Voulez-vous dire que vous souhaitez ajouter un nouvel abonné ?', askName: 'Très bien — quel est le nom de l\'abonné ?', askNameEmpty: 'Quel est le nom de l\'abonné ?', askMobile: 'Quel est le numéro de mobile de {name} ?', goalOrNot: 'Compris — dois-je ajouter {name} (mobile {mobile}) comme abonné général uniquement, ou aussi l\'inscrire à un objectif précis dès maintenant ? Répondez "juste ajouter" ou indiquez le nom de l\'objectif et le montant par période, ex. "Fonds Diwali à 500".', askAmount: 'Combien {name} (mobile {mobile}) doit-il/elle payer par période pour "{goalName}" ? Répondez par ex. "500".' },
+  es: { confirm: '¿Quieres decir que te gustaría agregar un nuevo suscriptor?', askName: 'Genial — ¿cuál es el nombre del suscriptor?', askNameEmpty: '¿Cuál es el nombre del suscriptor?', askMobile: '¿Cuál es el número de móvil de {name}?', goalOrNot: 'Entendido — ¿debo agregar a {name} (móvil {mobile}) solo como suscriptor general, o también suscribirlo a una meta específica ahora mismo? Responde "solo agregar" o indica el nombre de la meta y el monto por período, ej. "Fondo Diwali a 500".', askAmount: '¿Cuánto debería pagar {name} (móvil {mobile}) por período para "{goalName}"? Responde por ejemplo "500".' },
+  ar: { confirm: 'هل تقصد أنك تريد إضافة مشترك جديد؟', askName: 'رائع — ما اسم المشترك؟', askNameEmpty: 'ما اسم المشترك؟', askMobile: 'ما رقم جوال {name}؟', goalOrNot: 'فهمت — هل أضيف {name} (الجوال {mobile}) كمشترك عام فقط، أم أشترك أيضًا في هدف محدد الآن؟ رد بـ "فقط أضف" أو اذكر اسم الهدف والمبلغ لكل فترة، مثال "صندوق ديوالي بـ 500".', askAmount: 'كم يجب أن يدفع {name} (الجوال {mobile}) لكل فترة مقابل "{goalName}"؟ رد مثلاً بـ "500".' },
+  ru: { confirm: 'Вы хотите добавить нового подписчика?', askName: 'Отлично — как зовут подписчика?', askNameEmpty: 'Как зовут подписчика?', askMobile: 'Какой номер мобильного у {name}?', goalOrNot: 'Понял — добавить {name} (моб. {mobile}) только как обычного подписчика, или сразу подписать на конкретную цель? Ответьте «просто добавь» или укажите название цели и сумму за период, например «Фонд Дивали, 500».', askAmount: 'Сколько должен платить {name} (моб. {mobile}) за период за «{goalName}»? Ответьте, например, «500».' },
+  pt: { confirm: 'Você gostaria de adicionar um novo assinante?', askName: 'Ótimo — qual é o nome do assinante?', askNameEmpty: 'Qual é o nome do assinante?', askMobile: 'Qual é o número de celular de {name}?', goalOrNot: 'Entendi — devo adicionar {name} (celular {mobile}) apenas como assinante geral, ou também inscrevê-lo em uma meta específica agora? Responda "apenas adicionar" ou diga o nome da meta e o valor por período, ex. "Fundo Diwali com 500".', askAmount: 'Quanto {name} (celular {mobile}) deve pagar por período para "{goalName}"? Responda, por exemplo, "500".' },
+  zh: { confirm: '您是想添加一位新订阅者吗？', askName: '好的 — 订阅者叫什么名字？', askNameEmpty: '订阅者叫什么名字？', askMobile: '{name}的手机号是多少？', goalOrNot: '好的 — 是只将{name}（手机{mobile}）添加为普通订阅者，还是现在就将其订阅到某个具体目标？回复"直接添加"，或说明目标名称和每期金额，例如"排灯节基金 500"。', askAmount: '{name}（手机{mobile}）每期应为"{goalName}"支付多少？例如回复"500"。' }
+};
+
 // "no"/"no thanks"/etc. at the goal-or-not step means "no goal, just add
 // them" — a normal answer to that specific question, not an abort — so
 // that step goes in PENDING_FLOW_STRICT_ABORT_MARKERS (only unambiguous
 // wording like "cancel"/"stop" backs out of it) rather than
 // PENDING_FLOW_MARKERS (which would treat a bare "no" as an abort).
-const ADD_SUBSCRIBER_SKIP_GOAL_RE = /^\s*(just add|no goal|no thanks?|general only|none|no)\s*[.?!]*$/i;
+const ADD_SUBSCRIBER_SKIP_GOAL_RE = /^\s*(?:(?:just add|no goal|no thanks?|general only|none|no|nur hinzufügen|kein ziel|nein danke?|nur allgemein|keine|nein|juste ajouter|pas d'objectif|non merci|général seulement|aucun|non|solo agregar|sin meta|no gracias|solo general|ninguno)\s*[.?!]*|فقط أضف|بدون هدف|لا شكرا|عام فقط|لا شيء|لا|просто добавь|без цели|нет спасибо|только общий|никакой|нет|apenas adicionar|sem meta|não obrigado|apenas geral|nenhum|não|直接添加|不设目标|不用了|仅普通|无|不)\s*$/i;
+
+const ADD_SUBSCRIBER_CONFIRM_RE = new RegExp(Object.values(ADD_SUBSCRIBER_TEXT).map(t => escapeRegExp(t.confirm)).join('|'), 'i');
+const ADD_SUBSCRIBER_NAME_RE = new RegExp(Object.values(ADD_SUBSCRIBER_TEXT).map(t => `^${escapeRegExp(t.askName)}$`).join('|'), 'i');
+const ADD_SUBSCRIBER_MOBILE_RE = { test: (text) => testFlowAnyLang(ADD_SUBSCRIBER_TEXT, 'askMobile', text) };
+const ADD_SUBSCRIBER_GOAL_OR_NOT_RE = { test: (text) => testFlowAnyLang(ADD_SUBSCRIBER_TEXT, 'goalOrNot', text) };
+const ADD_SUBSCRIBER_AMOUNT_RE = { test: (text) => testFlowAnyLang(ADD_SUBSCRIBER_TEXT, 'askAmount', text) };
 
 function goalOrNotQuestion(name, mobile) {
-  return `Got it — should I add ${name} (mobile ${mobile}) as a general subscriber only, or also subscribe them to a specific goal right away? Reply "just add" or say the goal name and their per-period amount, e.g. "Diwali Fund at 500".`;
+  return renderFlow(ADD_SUBSCRIBER_TEXT, 'goalOrNot', { name, mobile });
 }
 
 PENDING_FLOW_MARKERS.push(ADD_SUBSCRIBER_CONFIRM_RE, ADD_SUBSCRIBER_NAME_RE, ADD_SUBSCRIBER_MOBILE_RE, ADD_SUBSCRIBER_AMOUNT_RE);
@@ -323,10 +456,11 @@ function parseAddSubscriber(msg, history) {
 
   // Step 6: answering "how much should X (mobile Y) pay per period for <goal>?"
   if (lastAssistant && ADD_SUBSCRIBER_AMOUNT_RE.test(lastAssistant.content)) {
-    const [, name, mobile, goalName] = lastAssistant.content.match(ADD_SUBSCRIBER_AMOUNT_RE);
+    const extracted = execFlowAnyLang(ADD_SUBSCRIBER_TEXT, 'askAmount', lastAssistant.content);
+    const { name, mobile, goalName } = extracted || {};
     const amount = extractBareOrAtAmount(msg);
     if (!amount) {
-      return { reply: `How much should ${name} (mobile ${mobile}) pay per period for "${goalName}"? Reply e.g. "500".`, handled: true };
+      return { reply: renderFlow(ADD_SUBSCRIBER_TEXT, 'askAmount', { name, mobile, goalName }), handled: true };
     }
     return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName, amount } }, handled: true };
   }
@@ -335,7 +469,8 @@ function parseAddSubscriber(msg, history) {
   // ("cancel"/"stop"/etc. here is already handled by cancelPendingFlowIfAny
   // in parseLocalIntent, before this is even reached)
   if (lastAssistant && ADD_SUBSCRIBER_GOAL_OR_NOT_RE.test(lastAssistant.content)) {
-    const [, name, mobile] = lastAssistant.content.match(ADD_SUBSCRIBER_GOAL_OR_NOT_RE);
+    const extracted = execFlowAnyLang(ADD_SUBSCRIBER_TEXT, 'goalOrNot', lastAssistant.content);
+    const { name, mobile } = extracted || {};
     if (ADD_SUBSCRIBER_SKIP_GOAL_RE.test(msg)) {
       return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile } }, handled: true };
     }
@@ -343,16 +478,17 @@ function parseAddSubscriber(msg, history) {
     const goalName = rest.trim();
     if (!goalName) return { reply: goalOrNotQuestion(name, mobile), handled: true };
     if (!amount) {
-      return { reply: `How much should ${name} (mobile ${mobile}) pay per period for "${goalName}"? Reply e.g. "${goalName} at 500".`, handled: true };
+      return { reply: renderFlow(ADD_SUBSCRIBER_TEXT, 'askAmount', { name, mobile, goalName }), handled: true };
     }
     return { reply: 'Here\'s what I understood:', action: { type: 'add_subscriber', params: { name, mobile, goalName, amount } }, handled: true };
   }
 
   // Step 4: answering "what's X's mobile number?"
   if (lastAssistant && ADD_SUBSCRIBER_MOBILE_RE.test(lastAssistant.content)) {
-    const name = lastAssistant.content.match(ADD_SUBSCRIBER_MOBILE_RE)[1];
+    const extracted = execFlowAnyLang(ADD_SUBSCRIBER_TEXT, 'askMobile', lastAssistant.content);
+    const name = extracted ? extracted.name : '';
     const mobileMatch = msg.match(/\b(\d{6,15})\b/);
-    if (!mobileMatch) return { reply: `What's ${name}'s mobile number?`, handled: true };
+    if (!mobileMatch) return { reply: renderFlow(ADD_SUBSCRIBER_TEXT, 'askMobile', { name }), handled: true };
     return { reply: goalOrNotQuestion(name, mobileMatch[1]), handled: true };
   }
 
@@ -362,22 +498,23 @@ function parseAddSubscriber(msg, history) {
     const mobileMatch = msg.match(/\b(\d{6,15})\b/);
     let name = msg.replace(/^(?:it'?s|its|name is|call(?:ed)?)\s+/i, '').replace(/[.?!]+$/, '').trim();
     if (mobileMatch) name = name.replace(mobileMatch[0], '').replace(/[,\s]+$/, '').trim();
-    if (!name) return { reply: 'What\'s the subscriber\'s name?', handled: true };
+    if (!name) return { reply: renderFlow(ADD_SUBSCRIBER_TEXT, 'askNameEmpty'), handled: true };
     if (mobileMatch) return { reply: goalOrNotQuestion(name, mobileMatch[1]), handled: true };
-    return { reply: `What's ${name}'s mobile number?`, handled: true };
+    return { reply: renderFlow(ADD_SUBSCRIBER_TEXT, 'askMobile', { name }), handled: true };
   }
 
   // Step 2: answering "are you saying you'd like to add a new subscriber?"
   if (lastAssistant && ADD_SUBSCRIBER_CONFIRM_RE.test(lastAssistant.content)) {
     if (!AFFIRMATIVE_RE.test(msg)) return null;
-    return { reply: 'Great — what\'s the subscriber\'s name?', handled: true };
+    return { reply: renderFlow(ADD_SUBSCRIBER_TEXT, 'askName'), handled: true };
   }
 
   // Step 1: first mention — a keyword hit only, nothing is assumed yet.
-  const wantsAdd = !HOW_TO_RE.test(msg)
-    && /\b(add|create|register)\b/i.test(msg) && /\b(subscriber|contributor)\b/i.test(msg);
+  const addSubscriberActionRe = /\b(add|create|register)\b|hinzufüg|registrier|\bajout|\benregistr|\bagregar\b|\bregistrar\b|إضافة|تسجيل|добав|регистр|添加|注册/i;
+  const subscriberWordRe = /\b(subscriber|contributor)\b|abonnent|\babonn[ée]|suscriptor|مشترك|подписчик|assinante|订阅者/i;
+  const wantsAdd = !HOW_TO_RE.test(msg) && addSubscriberActionRe.test(msg) && subscriberWordRe.test(msg);
   if (wantsAdd) {
-    return { reply: 'Are you saying you\'d like to add a new subscriber?', handled: true };
+    return { reply: renderFlow(ADD_SUBSCRIBER_TEXT, 'confirm'), handled: true };
   }
 
   return null;
@@ -387,15 +524,27 @@ const SUBSCRIBE_RE = /\bsubscribe\b\s+([a-z0-9 .'-]+?)\s+\bto\b\s+(?:the\s+)?(?:
 
 // Steps: confirm -> which subscriber -> which goal -> per-period amount.
 // The fast path (SUBSCRIBE_RE matching in one shot, e.g. "subscribe Ramesh
-// to Diwali Fund at 500") still works without any confirmation, same as
-// before — the confirm-first flow only kicks in when "subscribe" is used
-// without that exact shape. Deliberately keyed off the word "subscribe"
-// only (not "add ... to ... goal") to avoid colliding with add_subscriber's
-// own trigger words.
-const SUBSCRIBE_CONFIRM_RE = /are you saying you'd like to subscribe someone to a goal/i;
-const SUBSCRIBE_WHO_RE = /^great — who should i subscribe\?$/i;
-const SUBSCRIBE_GOAL_RE = /^which goal should i subscribe (.+?) to\?$/i;
-const SUBSCRIBE_AMOUNT_RE = /how much should (.+?) pay per period for "([^"]+)"/i;
+// to Diwali Fund at 500") is intentionally NOT localized — it's a one-shot
+// English sentence shape that doesn't translate to a single regex across 8
+// languages' grammars; non-English users still reach the same result via
+// the step-by-step flow below, which IS fully localized. Deliberately keyed
+// off the word "subscribe" only (not "add ... to ... goal") to avoid
+// colliding with add_subscriber's own trigger words.
+const SUBSCRIBE_TO_GOAL_TEXT = {
+  en: { confirm: 'Are you saying you\'d like to subscribe someone to a goal?', askWho: 'Great — who should I subscribe?', askWhoEmpty: 'Who should I subscribe?', askGoal: 'Which goal should I subscribe {subscriberName} to?', askAmount: 'How much should {subscriberName} pay per period for "{goalName}"? Reply e.g. "500".' },
+  de: { confirm: 'Möchten Sie jemanden für ein Ziel anmelden?', askWho: 'Gut — wen soll ich anmelden?', askWhoEmpty: 'Wen soll ich anmelden?', askGoal: 'Für welches Ziel soll ich {subscriberName} anmelden?', askAmount: 'Wie viel soll {subscriberName} pro Zeitraum für "{goalName}" zahlen? Antworten Sie z. B. mit "500".' },
+  fr: { confirm: 'Voulez-vous dire que vous souhaitez inscrire quelqu\'un à un objectif ?', askWho: 'Très bien — qui dois-je inscrire ?', askWhoEmpty: 'Qui dois-je inscrire ?', askGoal: 'À quel objectif dois-je inscrire {subscriberName} ?', askAmount: 'Combien {subscriberName} doit-il/elle payer par période pour "{goalName}" ? Répondez par ex. "500".' },
+  es: { confirm: '¿Quieres decir que te gustaría suscribir a alguien a una meta?', askWho: 'Genial — ¿a quién debo suscribir?', askWhoEmpty: '¿A quién debo suscribir?', askGoal: '¿A qué meta debo suscribir a {subscriberName}?', askAmount: '¿Cuánto debería pagar {subscriberName} por período para "{goalName}"? Responde por ejemplo "500".' },
+  ar: { confirm: 'هل تقصد أنك تريد اشتراك شخص ما في هدف؟', askWho: 'رائع — من الذي يجب أن أشترك؟', askWhoEmpty: 'من الذي يجب أن أشترك؟', askGoal: 'في أي هدف يجب أن أشترك {subscriberName}؟', askAmount: 'كم يجب أن يدفع {subscriberName} لكل فترة مقابل "{goalName}"؟ رد مثلاً بـ "500".' },
+  ru: { confirm: 'Вы хотите подписать кого-то на цель?', askWho: 'Отлично — кого подписать?', askWhoEmpty: 'Кого подписать?', askGoal: 'На какую цель подписать {subscriberName}?', askAmount: 'Сколько должен платить {subscriberName} за период за «{goalName}»? Ответьте, например, «500».' },
+  pt: { confirm: 'Você gostaria de inscrever alguém em uma meta?', askWho: 'Ótimo — quem devo inscrever?', askWhoEmpty: 'Quem devo inscrever?', askGoal: 'Em qual meta devo inscrever {subscriberName}?', askAmount: 'Quanto {subscriberName} deve pagar por período para "{goalName}"? Responda, por exemplo, "500".' },
+  zh: { confirm: '您是想将某人订阅到一个目标吗？', askWho: '好的 — 应该订阅谁？', askWhoEmpty: '应该订阅谁？', askGoal: '应将{subscriberName}订阅到哪个目标？', askAmount: '{subscriberName}每期应为"{goalName}"支付多少？例如回复"500"。' }
+};
+
+const SUBSCRIBE_CONFIRM_RE = new RegExp(Object.values(SUBSCRIBE_TO_GOAL_TEXT).map(t => escapeRegExp(t.confirm)).join('|'), 'i');
+const SUBSCRIBE_WHO_RE = new RegExp(Object.values(SUBSCRIBE_TO_GOAL_TEXT).map(t => `^${escapeRegExp(t.askWho)}$`).join('|'), 'i');
+const SUBSCRIBE_GOAL_RE = { test: (text) => testFlowAnyLang(SUBSCRIBE_TO_GOAL_TEXT, 'askGoal', text) };
+const SUBSCRIBE_AMOUNT_RE = { test: (text) => testFlowAnyLang(SUBSCRIBE_TO_GOAL_TEXT, 'askAmount', text) };
 PENDING_FLOW_MARKERS.push(SUBSCRIBE_CONFIRM_RE, SUBSCRIBE_WHO_RE, SUBSCRIBE_GOAL_RE, SUBSCRIBE_AMOUNT_RE);
 
 function parseSubscribeToGoal(msg, history) {
@@ -405,7 +554,7 @@ function parseSubscribeToGoal(msg, history) {
     const subscriberName = fastMatch[1].trim();
     const goalName = fastMatch[2].trim();
     if (!strippedAmount) {
-      return { reply: `How much should ${subscriberName} pay per period for "${goalName}"? Try: "subscribe ${subscriberName} to ${goalName} at 500".`, handled: true };
+      return { reply: renderFlow(SUBSCRIBE_TO_GOAL_TEXT, 'askAmount', { subscriberName, goalName }), handled: true };
     }
     return {
       reply: 'Here\'s what I understood:',
@@ -418,51 +567,72 @@ function parseSubscribeToGoal(msg, history) {
 
   // Step 4: answering "how much should X pay per period for <goal>?"
   if (lastAssistant && SUBSCRIBE_AMOUNT_RE.test(lastAssistant.content)) {
-    const [, subscriberName, goalName] = lastAssistant.content.match(SUBSCRIBE_AMOUNT_RE);
+    const extracted = execFlowAnyLang(SUBSCRIBE_TO_GOAL_TEXT, 'askAmount', lastAssistant.content);
+    const { subscriberName, goalName } = extracted || {};
     const amount = extractBareOrAtAmount(msg);
-    if (!amount) return { reply: `How much should ${subscriberName} pay per period for "${goalName}"? Reply e.g. "500".`, handled: true };
+    if (!amount) return { reply: renderFlow(SUBSCRIBE_TO_GOAL_TEXT, 'askAmount', { subscriberName, goalName }), handled: true };
     return { reply: 'Here\'s what I understood:', action: { type: 'subscribe_to_goal', params: { subscriberName, goalName, amount } }, handled: true };
   }
 
   // Step 3: answering "which goal should I subscribe X to?"
   if (lastAssistant && SUBSCRIBE_GOAL_RE.test(lastAssistant.content)) {
-    const subscriberName = lastAssistant.content.match(SUBSCRIBE_GOAL_RE)[1];
+    const extracted = execFlowAnyLang(SUBSCRIBE_TO_GOAL_TEXT, 'askGoal', lastAssistant.content);
+    const subscriberName = extracted ? extracted.subscriberName : '';
     const { rest: goalRest, amount } = stripTrailingAmount(msg);
     const goalName = goalRest.replace(/[.?!]+$/, '').trim();
-    if (!goalName) return { reply: `Which goal should I subscribe ${subscriberName} to?`, handled: true };
-    if (!amount) return { reply: `How much should ${subscriberName} pay per period for "${goalName}"? Reply e.g. "${goalName} at 500".`, handled: true };
+    if (!goalName) return { reply: renderFlow(SUBSCRIBE_TO_GOAL_TEXT, 'askGoal', { subscriberName }), handled: true };
+    if (!amount) return { reply: renderFlow(SUBSCRIBE_TO_GOAL_TEXT, 'askAmount', { subscriberName, goalName }), handled: true };
     return { reply: 'Here\'s what I understood:', action: { type: 'subscribe_to_goal', params: { subscriberName, goalName, amount } }, handled: true };
   }
 
   // Step 2: answering "who should I subscribe?"
   if (lastAssistant && SUBSCRIBE_WHO_RE.test(lastAssistant.content)) {
     const subscriberName = msg.replace(/[.?!]+$/, '').trim();
-    if (!subscriberName) return { reply: 'Who should I subscribe?', handled: true };
-    return { reply: `Which goal should I subscribe ${subscriberName} to?`, handled: true };
+    if (!subscriberName) return { reply: renderFlow(SUBSCRIBE_TO_GOAL_TEXT, 'askWhoEmpty'), handled: true };
+    return { reply: renderFlow(SUBSCRIBE_TO_GOAL_TEXT, 'askGoal', { subscriberName }), handled: true };
   }
 
   // Step 1 (confirm): answering "are you saying you'd like to subscribe someone to a goal?"
   if (lastAssistant && SUBSCRIBE_CONFIRM_RE.test(lastAssistant.content)) {
     if (!AFFIRMATIVE_RE.test(msg)) return null;
-    return { reply: 'Great — who should I subscribe?', handled: true };
+    return { reply: renderFlow(SUBSCRIBE_TO_GOAL_TEXT, 'askWho'), handled: true };
   }
 
   // Step 0: loose keyword hit — "subscribe" without the full one-shot shape
-  if (!HOW_TO_RE.test(msg) && /\bsubscribe\b/i.test(msg)) {
-    return { reply: 'Are you saying you\'d like to subscribe someone to a goal?', handled: true };
+  const subscribeWordRe = /\bsubscribe\b|\banmelden\b|\bs'abonner\b|\binscrire\b|\bsuscribir\b|اشتراك|подписать|\binscrever\b|订阅/i;
+  if (!HOW_TO_RE.test(msg) && subscribeWordRe.test(msg)) {
+    return { reply: renderFlow(SUBSCRIBE_TO_GOAL_TEXT, 'confirm'), handled: true };
   }
 
   return null;
 }
 
 // Steps: confirm -> who -> which goal -> pledge amount. The fast path
-// ("pledge 1000 for Ramesh towards Diwali Fund") still works in one shot.
+// ("pledge 1000 for Ramesh towards Diwali Fund") is intentionally NOT
+// localized — same reasoning as SUBSCRIBE_RE above; non-English users
+// still reach the same result via the fully-localized step-by-step flow.
 const CREATE_PLEDGE_RE = /\bpledge\b\s+(?:of\s+)?(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)\s+for\s+([a-z0-9 .'-]+?)\s+(?:towards|for|to)\s+([a-z0-9 &.'-]+?)[.?!]*$/i;
-const CREATE_PLEDGE_CONFIRM_RE = /are you saying you'd like to create a pledge/i;
-const CREATE_PLEDGE_WHO_RE = /^great — who is this pledge for\?$/i;
-const CREATE_PLEDGE_GOAL_RE = /^which event\/pledge goal is (.+?)'s pledge for\?$/i;
-const CREATE_PLEDGE_AMOUNT_RE = /^how much is (.+?) pledging (?:for|towards) "([^"]+)"\?$/i;
+const CREATE_PLEDGE_TEXT = {
+  en: { confirm: 'Are you saying you\'d like to create a pledge?', askWho: 'Great — who is this pledge for?', askWhoEmpty: 'Who is this pledge for?', askGoal: 'Which event/pledge goal is {subscriberName}\'s pledge for?', askAmount: 'How much is {subscriberName} pledging towards "{goalName}"?' },
+  de: { confirm: 'Möchten Sie eine Zusage erfassen?', askWho: 'Gut — für wen ist diese Zusage?', askWhoEmpty: 'Für wen ist diese Zusage?', askGoal: 'Für welches Event-/Zusage-Ziel ist die Zusage von {subscriberName}?', askAmount: 'Wie viel sagt {subscriberName} für "{goalName}" zu?' },
+  fr: { confirm: 'Voulez-vous dire que vous souhaitez créer une promesse ?', askWho: 'Très bien — pour qui est cette promesse ?', askWhoEmpty: 'Pour qui est cette promesse ?', askGoal: 'Pour quel objectif événement/promesse est la promesse de {subscriberName} ?', askAmount: 'Combien {subscriberName} promet-il/elle pour "{goalName}" ?' },
+  es: { confirm: '¿Quieres decir que te gustaría crear una promesa?', askWho: 'Genial — ¿para quién es esta promesa?', askWhoEmpty: '¿Para quién es esta promesa?', askGoal: '¿Para qué meta de evento/promesa es la promesa de {subscriberName}?', askAmount: '¿Cuánto está prometiendo {subscriberName} hacia "{goalName}"?' },
+  ar: { confirm: 'هل تقصد أنك تريد إنشاء تعهد؟', askWho: 'رائع — لمن هذا التعهد؟', askWhoEmpty: 'لمن هذا التعهد؟', askGoal: 'لأي هدف فعالية/تعهد هو تعهد {subscriberName}؟', askAmount: 'كم يتعهد {subscriberName} مقابل "{goalName}"؟' },
+  ru: { confirm: 'Вы хотите создать обещание?', askWho: 'Отлично — для кого это обещание?', askWhoEmpty: 'Для кого это обещание?', askGoal: 'Для какой цели-мероприятия/обещания это обещание {subscriberName}?', askAmount: 'Сколько обещает {subscriberName} для «{goalName}»?' },
+  pt: { confirm: 'Você gostaria de criar uma promessa?', askWho: 'Ótimo — para quem é essa promessa?', askWhoEmpty: 'Para quem é essa promessa?', askGoal: 'Para qual meta de evento/promessa é a promessa de {subscriberName}?', askAmount: 'Quanto {subscriberName} está prometendo para "{goalName}"?' },
+  zh: { confirm: '您是想创建一笔认捐吗？', askWho: '好的 — 这笔认捐是给谁的？', askWhoEmpty: '这笔认捐是给谁的？', askGoal: '{subscriberName}的认捐是针对哪个活动/认捐目标？', askAmount: '{subscriberName}为"{goalName}"认捐多少？' }
+};
+
+const CREATE_PLEDGE_CONFIRM_RE = new RegExp(Object.values(CREATE_PLEDGE_TEXT).map(t => escapeRegExp(t.confirm)).join('|'), 'i');
+const CREATE_PLEDGE_WHO_RE = new RegExp(Object.values(CREATE_PLEDGE_TEXT).map(t => `^${escapeRegExp(t.askWho)}$`).join('|'), 'i');
+const CREATE_PLEDGE_GOAL_RE = { test: (text) => testFlowAnyLang(CREATE_PLEDGE_TEXT, 'askGoal', text) };
+const CREATE_PLEDGE_AMOUNT_RE = { test: (text) => testFlowAnyLang(CREATE_PLEDGE_TEXT, 'askAmount', text) };
 PENDING_FLOW_MARKERS.push(CREATE_PLEDGE_CONFIRM_RE, CREATE_PLEDGE_WHO_RE, CREATE_PLEDGE_GOAL_RE, CREATE_PLEDGE_AMOUNT_RE);
+
+// Shared with the pledge step-0 exclusion check below — "create a pledge"
+// in any of the 8 languages means a new pledge-category GOAL (create_goal),
+// not recording an existing subscriber's pledge amount.
+const CREATE_ACTION_WORDS_RE = /\b(create|add|start|set ?up)\b|erstell|anlegen|hinzufüg|\bcré|\bajout|\bcommenc|\bcrear\b|\bagregar\b|\biniciar\b|إنشاء|إضافة|بدء|созда|добав|начать|\bcriar\b|创建|添加|开始/i;
 
 function parseCreatePledge(msg, history) {
   const fastMatch = msg.match(CREATE_PLEDGE_RE);
@@ -478,41 +648,44 @@ function parseCreatePledge(msg, history) {
 
   // Step 4: answering "how much is X pledging towards <goal>?"
   if (lastAssistant && CREATE_PLEDGE_AMOUNT_RE.test(lastAssistant.content)) {
-    const [, subscriberName, goalName] = lastAssistant.content.match(CREATE_PLEDGE_AMOUNT_RE);
+    const extracted = execFlowAnyLang(CREATE_PLEDGE_TEXT, 'askAmount', lastAssistant.content);
+    const { subscriberName, goalName } = extracted || {};
     const amount = extractBareOrAtAmount(msg);
-    if (!amount) return { reply: `How much is ${subscriberName} pledging towards "${goalName}"?`, handled: true };
+    if (!amount) return { reply: renderFlow(CREATE_PLEDGE_TEXT, 'askAmount', { subscriberName, goalName }), handled: true };
     return { reply: 'Here\'s what I understood:', action: { type: 'create_pledge', params: { amount, subscriberName, goalName } }, handled: true };
   }
 
   // Step 3: answering "which event/pledge goal is X's pledge for?"
   if (lastAssistant && CREATE_PLEDGE_GOAL_RE.test(lastAssistant.content)) {
-    const subscriberName = lastAssistant.content.match(CREATE_PLEDGE_GOAL_RE)[1];
+    const extracted = execFlowAnyLang(CREATE_PLEDGE_TEXT, 'askGoal', lastAssistant.content);
+    const subscriberName = extracted ? extracted.subscriberName : '';
     const { rest, amount } = stripTrailingAmount(msg);
     const goalName = rest.replace(/[.?!]+$/, '').trim();
-    if (!goalName) return { reply: `Which event/pledge goal is ${subscriberName}'s pledge for?`, handled: true };
-    if (!amount) return { reply: `How much is ${subscriberName} pledging towards "${goalName}"?`, handled: true };
+    if (!goalName) return { reply: renderFlow(CREATE_PLEDGE_TEXT, 'askGoal', { subscriberName }), handled: true };
+    if (!amount) return { reply: renderFlow(CREATE_PLEDGE_TEXT, 'askAmount', { subscriberName, goalName }), handled: true };
     return { reply: 'Here\'s what I understood:', action: { type: 'create_pledge', params: { amount, subscriberName, goalName } }, handled: true };
   }
 
   // Step 2: answering "who is this pledge for?"
   if (lastAssistant && CREATE_PLEDGE_WHO_RE.test(lastAssistant.content)) {
     const subscriberName = msg.replace(/[.?!]+$/, '').trim();
-    if (!subscriberName) return { reply: 'Who is this pledge for?', handled: true };
-    return { reply: `Which event/pledge goal is ${subscriberName}'s pledge for?`, handled: true };
+    if (!subscriberName) return { reply: renderFlow(CREATE_PLEDGE_TEXT, 'askWhoEmpty'), handled: true };
+    return { reply: renderFlow(CREATE_PLEDGE_TEXT, 'askGoal', { subscriberName }), handled: true };
   }
 
   // Step 1 (confirm)
   if (lastAssistant && CREATE_PLEDGE_CONFIRM_RE.test(lastAssistant.content)) {
     if (!AFFIRMATIVE_RE.test(msg)) return null;
-    return { reply: 'Great — who is this pledge for?', handled: true };
+    return { reply: renderFlow(CREATE_PLEDGE_TEXT, 'askWho'), handled: true };
   }
 
   // Step 0: loose "pledge" keyword hit, not matching the one-shot shape.
   // Excludes create/add/start/setup wording — "create a pledge" means a
   // new pledge-category GOAL (create_goal, handled by parseCreateGoal),
   // not recording an existing subscriber's pledge amount against one.
-  if (!HOW_TO_RE.test(msg) && /\bpledge\b/i.test(msg) && !/\b(create|add|start|set ?up)\b/i.test(msg)) {
-    return { reply: 'Are you saying you\'d like to create a pledge?', handled: true };
+  const pledgeWordRe = /\bpledge\b|\bzusage\b|\bpromesse\b|\bpromesa\b|تعهد|обещани|\bpromessa\b|认捐/i;
+  if (!HOW_TO_RE.test(msg) && pledgeWordRe.test(msg) && !CREATE_ACTION_WORDS_RE.test(msg)) {
+    return { reply: renderFlow(CREATE_PLEDGE_TEXT, 'confirm'), handled: true };
   }
 
   return null;
@@ -1431,7 +1604,7 @@ const GOAL_MENU_TEXT = {
 const GOAL_OPTION_KEYWORDS = {
   en: { 1: /\bcreate\b/i, 2: /\bview\b/i, 3: /\bpending\b|\bmissed\b/i, 4: /\bdelete\b/i, 5: /\bcomplete\b/i, 6: /\brollover\b|\brolling over\b/i, 7: /\breceipt\b|\bdownload\b/i, 8: /\b(something else|not covered|other|claude|ai)\b/i },
   de: { 1: /\berstell/i, 2: /\banzeig/i, 3: /\bverpasst\b|\bausstehend\b/i, 4: /\blösch/i, 5: /\babgeschlossen\b|\bkomplett/i, 6: /\brollover\b/i, 7: /\bbeleg\b|\bherunterlad/i, 8: /\b(sonstiges|etwas anderes|andere|claude|ai)\b/i },
-  fr: { 1: /\bcré/i, 2: /\bvoir\b/i, 3: /\bmanqu[ée]s?\b|\battente\b/i, 4: /\bsupprim/i, 5: /\btermin/i, 6: /\breport\b/i, 7: /\breçu\b|\btélécharg/i, 8: /\b(autre chose|autre|claude|ai)\b/i },
+  fr: { 1: /\bcré/i, 2: /\bvoir\b/i, 3: /\bmanqu[ée]s?(?!\w)|\battente\b/i, 4: /\bsupprim/i, 5: /\btermin/i, 6: /\breport\b/i, 7: /\breçu\b|\btélécharg/i, 8: /\b(autre chose|autre|claude|ai)\b/i },
   es: { 1: /\bcrear\b/i, 2: /\bver\b/i, 3: /\bpendientes?\b|\bperdidos?\b/i, 4: /\beliminar\b/i, 5: /\bcompletad/i, 6: /\brenovaci[oó]n\b/i, 7: /\brecibo\b|\bdescargar\b/i, 8: /\b(otra cosa|otro|claude|ai)\b/i },
   ar: { 1: /إنشاء/, 2: /عرض/, 3: /فائت|معلق|معلّق/, 4: /حذف/, 5: /مكتمل/, 6: /تدوير/, 7: /إيصال|تنزيل/, 8: /أخرى|claude|ai/i },
   ru: { 1: /созда/i, 2: /просмотр/i, 3: /пропущено|ожидает/i, 4: /удал/i, 5: /выполн/i, 6: /перенос/i, 7: /квитанц/i, 8: /другое|claude|ai/i },
@@ -1556,7 +1729,7 @@ const ACCOUNTING_MENU_TEXT = {
 const ACCOUNTING_OPTION_KEYWORDS = {
   en: { 1: /\btotal\b/i, 2: /\bday\b|\bdaywise\b/i, 3: /\bgoal\b|\bgoalwise\b/i, 4: /\bpending\b|\bpaid\b/i, 5: /\binsights?\b/i, 6: /\b(something else|not covered|other|claude|ai)\b/i },
   de: { 1: /\bgesamt/i, 2: /\btag\b/i, 3: /\bziel\b/i, 4: /\bausstehend\b|\bbezahlt\b/i, 5: /\beinblick/i, 6: /\b(sonstiges|etwas anderes|andere|claude|ai)\b/i },
-  fr: { 1: /\btotal\b/i, 2: /\bjour\b/i, 3: /\bobjectif\b/i, 4: /\battente\b|\bpayé\b/i, 5: /\baperçus?\b/i, 6: /\b(autre chose|autre|claude|ai)\b/i },
+  fr: { 1: /\btotal\b/i, 2: /\bjour\b/i, 3: /\bobjectif\b/i, 4: /\battente\b|\bpayé(?!\w)/i, 5: /\baperçus?\b/i, 6: /\b(autre chose|autre|claude|ai)\b/i },
   es: { 1: /\btotal\b/i, 2: /\bd[ií]a\b/i, 3: /\bmeta\b/i, 4: /\bpendientes?\b|\bpagados?\b/i, 5: /\bperspectivas?\b/i, 6: /\b(otra cosa|otro|claude|ai)\b/i },
   ar: { 1: /إجمالي/, 2: /يومي/, 3: /هدف/, 4: /معلّق|مدفوع/, 5: /رؤى/, 6: /أخرى|claude|ai/i },
   ru: { 1: /общ/i, 2: /дн[яеьи]/i, 3: /цел/i, 4: /ожидает|оплачено/i, 5: /аналитик/i, 6: /другое|claude|ai/i },
@@ -1564,7 +1737,7 @@ const ACCOUNTING_OPTION_KEYWORDS = {
   zh: { 1: /总/, 2: /按日/, 3: /按目标/, 4: /待处理|已付款/, 5: /洞察/, 6: /其他|claude|ai/i }
 };
 
-const ACCOUNTING_TOPIC_RE = { en: /\baccounting\b|\baccounts?\b/i, de: /\bbuchhaltung\b/i, fr: /\bcomptabilit[ée]\b/i, es: /\bcontabilidad\b/i, ar: /محاسبة/, ru: /бухгалтери/i, pt: /\bcontabilidade\b/i, zh: /账务|财务/ };
+const ACCOUNTING_TOPIC_RE = { en: /\baccounting\b|\baccounts?\b/i, de: /\bbuchhaltung\b/i, fr: /\bcomptabilit[ée](?!\w)/i, es: /\bcontabilidad\b/i, ar: /محاسبة/, ru: /бухгалтери/i, pt: /\bcontabilidade\b/i, zh: /账务|财务/ };
 
 function accountingMenuQuestion() {
   const t = ACCOUNTING_MENU_TEXT[currentLang] || ACCOUNTING_MENU_TEXT.en;
@@ -1861,7 +2034,7 @@ const SUBSCRIBER_OPTION_KEYWORDS = {
   zh: { 1: /添加/, 2: /查看|详情/, 3: /删除|移除/, 4: /如何/, 5: /编辑/, 6: /其他|claude|ai/i }
 };
 
-const SUBSCRIBER_TOPIC_RE = { en: /\bsubscribers?\b/i, de: /\babonnent(en)?\b/i, fr: /\babonn[ée]s?\b/i, es: /\bsuscriptor(es)?\b/i, ar: /مشترك/, ru: /подписчик/i, pt: /\bassinante(s)?\b/i, zh: /订阅者|订阅/ };
+const SUBSCRIBER_TOPIC_RE = { en: /\bsubscribers?\b/i, de: /\babonnent(en)?\b/i, fr: /\babonn[ée]s?(?!\w)/i, es: /\bsuscriptor(es)?\b/i, ar: /مشترك/, ru: /подписчик/i, pt: /\bassinante(s)?\b/i, zh: /订阅者|订阅/ };
 
 function subscriberMenuQuestion() {
   const t = SUBSCRIBER_MENU_TEXT[currentLang] || SUBSCRIBER_MENU_TEXT.en;
