@@ -60,7 +60,7 @@ const ROOT_OPTION_KEYWORDS = {
   fr: { 1: /\bobjectifs?\b/i, 2: /\babonn[ée]s?\b/i, 3: /\bmanqu[ée]s?\b|\battente\b/i, 4: /\bcomptabilit[ée]\b/i, 5: /\b(autre chose|autre|claude|ai)\b/i },
   es: { 1: /\bmetas?\b/i, 2: /\bsuscriptor(es)?\b/i, 3: /\bpendientes?\b|\bperdidos?\b/i, 4: /\bcontabilidad\b/i, 5: /\b(otra cosa|otro|claude|ai)\b/i },
   ar: { 1: /الأهداف|هدف/, 2: /مشترك/, 3: /فائت|معلق|معلّق/, 4: /محاسبة/, 5: /أخرى|claude|ai/i },
-  ru: { 1: /\bцел(и|ь)\b/i, 2: /\bподписчик/i, 3: /\bпропущено\b|\bожидает\b/i, 4: /\bбухгалтери/i, 5: /\bдругое\b|claude|ai/i },
+  ru: { 1: /цел(и|ь)/i, 2: /подписчик/i, 3: /пропущено|ожидает/i, 4: /бухгалтери/i, 5: /другое|claude|ai/i },
   pt: { 1: /\bmetas?\b/i, 2: /\bassinante(s)?\b/i, 3: /\bperdidos?\b|\bpendentes?\b/i, 4: /\bcontabilidade\b/i, 5: /\b(outra coisa|outro|claude|ai)\b/i },
   zh: { 1: /目标/, 2: /订阅/, 3: /待处理|错过/, 4: /账务|财务/, 5: /其他|claude|ai/i }
 };
@@ -1365,15 +1365,31 @@ const FALLBACK_REPLY = 'Test mode (no AI key set yet): I can currently handle cr
 // One shared marker/handler for all five menus, since the step is
 // identical everywhere.
 // ---------------------------------------------------------------
-const ANY_OTHER_ASK_TEXT = 'Please enter your requirement below.';
-const ANY_OTHER_ASK_RE = /^please enter your requirement below\.$/i;
+const ANY_OTHER_TEXT = {
+  en: 'Please enter your requirement below.',
+  de: 'Bitte geben Sie unten Ihr Anliegen ein.',
+  fr: 'Veuillez saisir votre demande ci-dessous.',
+  es: 'Por favor, escribe tu solicitud a continuación.',
+  ar: 'يرجى إدخال طلبك أدناه.',
+  ru: 'Пожалуйста, введите ваш запрос ниже.',
+  pt: 'Por favor, insira sua solicitação abaixo.',
+  zh: '请在下方输入您的需求。'
+};
+const ANY_OTHER_ASK_RE = new RegExp(
+  Object.values(ANY_OTHER_TEXT).map(t => `^${escapeRegExp(t)}$`).join('|'),
+  'i'
+);
 PENDING_FLOW_MARKERS.push(ANY_OTHER_ASK_RE);
+
+function anyOtherAskText() {
+  return ANY_OTHER_TEXT[currentLang] || ANY_OTHER_TEXT.en;
+}
 
 function parseAnyOtherLookup(msg, history) {
   const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
   if (!(lastAssistant && ANY_OTHER_ASK_RE.test(lastAssistant.content))) return null;
   const trimmed = msg.trim();
-  if (!trimmed) return { reply: ANY_OTHER_ASK_TEXT, handled: true };
+  if (!trimmed) return { reply: anyOtherAskText(), handled: true };
   return { reply: '', handled: false, escalateMessage: trimmed };
 }
 
@@ -1394,8 +1410,46 @@ function parseAnyOtherLookup(msg, history) {
 // rather than escalating the original menu-triggering question, which by
 // this point may be stale or no longer what they mean.
 // ---------------------------------------------------------------
-const GOAL_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a goal. Please choose one:\n1. Create a Goal\n2. View Goals\n3. List of Pending Subscribers\n4. Delete a Goal\n5. Mark Goal as Complete\n6. Stop Rollover the Goal\n7. Download Receipt\n8. Any other';
-const GOAL_MENU_RE = /i'm not quite sure what you'd like to do with a goal\. please choose one:/i;
+// Menu text + option list localized to all 8 UI languages, same approach
+// as ROOT_MENU_TEXT. The follow-up REPLIES for options 1/5/6/7 (which hand
+// off into their own flows — create/complete/rollover/receipt-lookup)
+// deliberately stay English literal below (CREATE_GOAL_NAME_RE etc. match
+// that exact text elsewhere) — only the menu itself and the terminal
+// options (2/3/4/8, which just loop back to this same menu) are fully
+// localized both ways.
+const GOAL_MENU_TEXT = {
+  en: { intro: 'I\'m not quite sure what you\'d like to do with a goal. Please choose one:', options: ['Create a Goal', 'View Goals', 'List of Pending Subscribers', 'Delete a Goal', 'Mark Goal as Complete', 'Stop Rollover the Goal', 'Download Receipt', 'Any other'], openingGoals: 'Opening Goals for you.' },
+  de: { intro: 'Ich bin nicht ganz sicher, was Sie mit einem Ziel tun möchten. Bitte wählen Sie eine Option:', options: ['Ziel erstellen', 'Ziele anzeigen', 'Liste ausstehender Abonnenten', 'Ziel löschen', 'Ziel als abgeschlossen markieren', 'Rollover des Ziels stoppen', 'Beleg herunterladen', 'Sonstiges'], openingGoals: 'Öffne Ziele für Sie.' },
+  fr: { intro: 'Je ne suis pas sûr de ce que vous souhaitez faire avec un objectif. Veuillez choisir une option :', options: ['Créer un objectif', 'Voir les objectifs', 'Liste des abonnés en attente', 'Supprimer un objectif', 'Marquer l\'objectif comme terminé', 'Arrêter le report de l\'objectif', 'Télécharger le reçu', 'Autre chose'], openingGoals: 'Ouverture des Objectifs pour vous.' },
+  es: { intro: 'No estoy seguro de qué quieres hacer con una meta. Elige una opción:', options: ['Crear una meta', 'Ver metas', 'Lista de suscriptores pendientes', 'Eliminar una meta', 'Marcar meta como completada', 'Detener la renovación de la meta', 'Descargar el recibo', 'Otra cosa'], openingGoals: 'Abriendo Metas para ti.' },
+  ar: { intro: 'لست متأكدًا تمامًا مما تريد فعله بخصوص هدف. يرجى اختيار خيار:', options: ['إنشاء هدف', 'عرض الأهداف', 'قائمة المشتركين المعلّقين', 'حذف هدف', 'تعليم الهدف كمكتمل', 'إيقاف تدوير الهدف', 'تنزيل الإيصال', 'أخرى'], openingGoals: 'يتم فتح الأهداف من أجلك.' },
+  ru: { intro: 'Я не совсем понял, что вы хотите сделать с целью. Пожалуйста, выберите вариант:', options: ['Создать цель', 'Просмотреть цели', 'Список ожидающих подписчиков', 'Удалить цель', 'Отметить цель как выполненную', 'Остановить перенос цели', 'Скачать квитанцию', 'Другое'], openingGoals: 'Открываю раздел «Цели» для вас.' },
+  pt: { intro: 'Não tenho certeza do que você gostaria de fazer com uma meta. Por favor, escolha uma opção:', options: ['Criar uma meta', 'Ver metas', 'Lista de assinantes pendentes', 'Excluir uma meta', 'Marcar meta como concluída', 'Parar a renovação da meta', 'Baixar recibo', 'Outra coisa'], openingGoals: 'Abrindo Metas para você.' },
+  zh: { intro: '我不太确定您想对目标做什么。请选择一项：', options: ['创建目标', '查看目标', '待处理订阅者列表', '删除目标', '将目标标记为已完成', '停止目标滚动', '下载收据', '其他'], openingGoals: '正在为您打开目标。' }
+};
+
+const GOAL_OPTION_KEYWORDS = {
+  en: { 1: /\bcreate\b/i, 2: /\bview\b/i, 3: /\bpending\b|\bmissed\b/i, 4: /\bdelete\b/i, 5: /\bcomplete\b/i, 6: /\brollover\b|\brolling over\b/i, 7: /\breceipt\b|\bdownload\b/i, 8: /\b(something else|not covered|other|claude|ai)\b/i },
+  de: { 1: /\berstell/i, 2: /\banzeig/i, 3: /\bverpasst\b|\bausstehend\b/i, 4: /\blösch/i, 5: /\babgeschlossen\b|\bkomplett/i, 6: /\brollover\b/i, 7: /\bbeleg\b|\bherunterlad/i, 8: /\b(sonstiges|etwas anderes|andere|claude|ai)\b/i },
+  fr: { 1: /\bcré/i, 2: /\bvoir\b/i, 3: /\bmanqu[ée]s?\b|\battente\b/i, 4: /\bsupprim/i, 5: /\btermin/i, 6: /\breport\b/i, 7: /\breçu\b|\btélécharg/i, 8: /\b(autre chose|autre|claude|ai)\b/i },
+  es: { 1: /\bcrear\b/i, 2: /\bver\b/i, 3: /\bpendientes?\b|\bperdidos?\b/i, 4: /\beliminar\b/i, 5: /\bcompletad/i, 6: /\brenovaci[oó]n\b/i, 7: /\brecibo\b|\bdescargar\b/i, 8: /\b(otra cosa|otro|claude|ai)\b/i },
+  ar: { 1: /إنشاء/, 2: /عرض/, 3: /فائت|معلق|معلّق/, 4: /حذف/, 5: /مكتمل/, 6: /تدوير/, 7: /إيصال|تنزيل/, 8: /أخرى|claude|ai/i },
+  ru: { 1: /созда/i, 2: /просмотр/i, 3: /пропущено|ожидает/i, 4: /удал/i, 5: /выполн/i, 6: /перенос/i, 7: /квитанц/i, 8: /другое|claude|ai/i },
+  pt: { 1: /\bcriar\b/i, 2: /\bver\b/i, 3: /\bperdidos?\b|\bpendentes?\b/i, 4: /\bexcluir\b/i, 5: /\bconcluíd/i, 6: /\brenovaç/i, 7: /\brecibo\b|\bbaixar\b/i, 8: /\b(outra coisa|outro|claude|ai)\b/i },
+  zh: { 1: /创建/, 2: /查看/, 3: /待处理|错过/, 4: /删除/, 5: /完成/, 6: /滚动/, 7: /收据|下载/, 8: /其他|claude|ai/i }
+};
+
+const GOAL_TOPIC_RE = { en: /\bgoal\b/i, de: /\bziel/i, fr: /\bobjectif/i, es: /\bmeta\b/i, ar: /هدف/, ru: /цел/i, pt: /\bmeta\b/i, zh: /目标/ };
+
+function goalMenuQuestion() {
+  const t = GOAL_MENU_TEXT[currentLang] || GOAL_MENU_TEXT.en;
+  return `${t.intro}\n${t.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`;
+}
+
+const GOAL_MENU_RE = new RegExp(
+  Object.values(GOAL_MENU_TEXT).map(t => escapeRegExp(t.intro)).join('|'),
+  'i'
+);
 PENDING_FLOW_MARKERS.push(GOAL_MENU_RE);
 
 const GOALS_LIST_RECEIPTS_WHO_RE = /^great — what's the subscriber's name or mobile number, so i can list their receipts\?$/i;
@@ -1419,11 +1473,18 @@ function parseListReceiptsLookup(msg, history) {
 function parseGoalFallbackMenu(msg, history) {
   const safeHistory = Array.isArray(history) ? history : [];
   const lastAssistant = [...safeHistory].reverse().find(h => h.role === 'assistant');
+  const kw = GOAL_OPTION_KEYWORDS[currentLang] || GOAL_OPTION_KEYWORDS.en;
+  const t = GOAL_MENU_TEXT[currentLang] || GOAL_MENU_TEXT.en;
 
   if (lastAssistant && GOAL_MENU_RE.test(lastAssistant.content)) {
     const choice = msg.trim().toLowerCase();
 
-    if (/^1\b/.test(choice) || (/\bcreate\b/i.test(choice) && !/\bdelete\b/i.test(choice))) {
+    // Options 1/5/6/7's reply text below stays English literal on purpose
+    // — CREATE_GOAL_NAME_RE/MARK_COMPLETE_NAME_RE/STOP_ROLLOVER_NAME_RE/
+    // GOALS_LIST_RECEIPTS_WHO_RE match that exact text elsewhere and hand
+    // off into their own (not-yet-localized) flows. Only the menu itself
+    // and picking an option are localized.
+    if (/^1\b/.test(choice) || (kw[1].test(choice) && !kw[4].test(choice))) {
       return { reply: 'Great — what should the goal be named?', handled: true };
     }
     // Options 2-4 and 7 are terminal or hand off elsewhere without looping
@@ -1431,35 +1492,37 @@ function parseGoalFallbackMenu(msg, history) {
     // terminal reply so the next pick ("4", "6", etc.) still has the menu
     // question as the last assistant turn to match against, instead of
     // falling through to Claude with nothing to go on.
-    if (/^2\b/.test(choice) || /\bview\b/i.test(choice)) {
-      return { reply: `Opening Goals for you.\n\n${GOAL_MENU_QUESTION}`, action: { type: 'view_goals', params: {} }, handled: true };
+    if (/^2\b/.test(choice) || kw[2].test(choice)) {
+      return { reply: `${t.openingGoals}\n\n${goalMenuQuestion()}`, action: { type: 'view_goals', params: {} }, handled: true };
     }
-    if (/^3\b/.test(choice) || /\bpending\b|\bmissed\b/i.test(choice)) {
-      return { reply: `Opening Pending for you.\n\n${GOAL_MENU_QUESTION}`, action: { type: 'view_pending', params: {} }, handled: true };
+    if (/^3\b/.test(choice) || kw[3].test(choice)) {
+      const rootT = ROOT_MENU_TEXT[currentLang] || ROOT_MENU_TEXT.en;
+      return { reply: `${rootT.openingPending}\n\n${goalMenuQuestion()}`, action: { type: 'view_pending', params: {} }, handled: true };
     }
-    if (/^4\b/.test(choice) || /\bdelete\b/i.test(choice)) {
+    if (/^4\b/.test(choice) || kw[4].test(choice)) {
       const deleteResult = handleDeleteIntent('delete goal');
-      return { reply: `${deleteResult.reply}\n\n${GOAL_MENU_QUESTION}`, handled: true };
+      return { reply: `${deleteResult.reply}\n\n${goalMenuQuestion()}`, handled: true };
     }
-    if (/^5\b/.test(choice) || /\bcomplete\b/i.test(choice)) {
+    if (/^5\b/.test(choice) || kw[5].test(choice)) {
       return { reply: 'Great — which goal should I mark complete?', handled: true };
     }
-    if (/^6\b/.test(choice) || /\brollover\b|\brolling over\b/i.test(choice)) {
+    if (/^6\b/.test(choice) || kw[6].test(choice)) {
       return { reply: 'Great — which goal should I stop from rolling over?', handled: true };
     }
-    if (/^7\b/.test(choice) || /\breceipt\b|\bdownload\b/i.test(choice)) {
+    if (/^7\b/.test(choice) || kw[7].test(choice)) {
       return { reply: 'Great — what\'s the subscriber\'s name or mobile number, so I can list their receipts?', handled: true };
     }
-    if (/^8\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
-      return { reply: ANY_OTHER_ASK_TEXT, handled: true };
+    if (/^8\b/.test(choice) || kw[8].test(choice)) {
+      return { reply: anyOtherAskText(), handled: true };
     }
 
     // Unrecognized reply to the menu — re-ask rather than guess.
-    return { reply: GOAL_MENU_QUESTION, handled: true };
+    return { reply: goalMenuQuestion(), handled: true };
   }
 
-  if (!HOW_TO_RE.test(msg) && /\bgoal\b/i.test(msg)) {
-    return { reply: GOAL_MENU_QUESTION, handled: true };
+  const topicRe = GOAL_TOPIC_RE[currentLang] || GOAL_TOPIC_RE.en;
+  if (!HOW_TO_RE.test(msg) && topicRe.test(msg)) {
+    return { reply: goalMenuQuestion(), handled: true };
   }
 
   return null;
@@ -1475,13 +1538,50 @@ function parseGoalFallbackMenu(msg, history) {
 // assistant.js), keeping the system prompt from growing for menu-only
 // actions, same reasoning as view_goals/view_pending.
 // ---------------------------------------------------------------
-const ACCOUNTING_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do in Accounting. Please choose one:\n1. View Total Amount Collected\n2. Download Total Collected — Day-wise\n3. Download Total Collected — Goal-wise\n4. List of Pending & Paid\n5. Insights (charts & report)\n6. Any other';
-const ACCOUNTING_MENU_RE = /i'm not quite sure what you'd like to do in accounting\. please choose one:/i;
+// Every option here is terminal (read-only reports/navigation, nothing
+// hands off into another flow), so this menu is fully localized end to
+// end — unlike Goals/Subscribers/Collect, there's no English-literal
+// marker text downstream to preserve.
+const ACCOUNTING_MENU_TEXT = {
+  en: { intro: 'I\'m not quite sure what you\'d like to do in Accounting. Please choose one:', options: ['View Total Amount Collected', 'Download Total Collected — Day-wise', 'Download Total Collected — Goal-wise', 'List of Pending & Paid', 'Insights (charts & report)', 'Any other'], downloadingDaywise: 'Downloading your day-wise ledger.', downloadingGoalwise: 'Downloading your goal-wise ledger.', pickGoalForReport: 'Here are your active goals — pick one for the pending & paid report.', generatingInsights: 'Generating your insights report.' },
+  de: { intro: 'Ich bin nicht ganz sicher, was Sie in der Buchhaltung tun möchten. Bitte wählen Sie eine Option:', options: ['Gesamtbetrag anzeigen', 'Gesamtbetrag herunterladen — nach Tag', 'Gesamtbetrag herunterladen — nach Ziel', 'Liste Ausstehend & Bezahlt', 'Einblicke (Diagramme & Bericht)', 'Sonstiges'], downloadingDaywise: 'Ihr tagesweises Kontobuch wird heruntergeladen.', downloadingGoalwise: 'Ihr zielweises Kontobuch wird heruntergeladen.', pickGoalForReport: 'Hier sind Ihre aktiven Ziele — wählen Sie eines für den Bericht über Ausstehend & Bezahlt.', generatingInsights: 'Ihr Einblicke-Bericht wird erstellt.' },
+  fr: { intro: 'Je ne suis pas sûr de ce que vous souhaitez faire en Comptabilité. Veuillez choisir une option :', options: ['Voir le montant total collecté', 'Télécharger le total collecté — par jour', 'Télécharger le total collecté — par objectif', 'Liste En attente et Payé', 'Aperçus (graphiques et rapport)', 'Autre chose'], downloadingDaywise: 'Téléchargement de votre registre quotidien.', downloadingGoalwise: 'Téléchargement de votre registre par objectif.', pickGoalForReport: 'Voici vos objectifs actifs — choisissez-en un pour le rapport En attente et Payé.', generatingInsights: 'Génération de votre rapport d\'aperçus.' },
+  es: { intro: 'No estoy seguro de qué quieres hacer en Contabilidad. Elige una opción:', options: ['Ver el monto total recaudado', 'Descargar total recaudado — por día', 'Descargar total recaudado — por meta', 'Lista de Pendientes y Pagados', 'Perspectivas (gráficos e informe)', 'Otra cosa'], downloadingDaywise: 'Descargando tu libro diario.', downloadingGoalwise: 'Descargando tu libro por meta.', pickGoalForReport: 'Aquí están tus metas activas — elige una para el informe de pendientes y pagados.', generatingInsights: 'Generando tu informe de perspectivas.' },
+  ar: { intro: 'لست متأكدًا تمامًا مما تريد فعله في المحاسبة. يرجى اختيار خيار:', options: ['عرض إجمالي المبلغ المُحصَّل', 'تنزيل الإجمالي المُحصَّل — يوميًا', 'تنزيل الإجمالي المُحصَّل — حسب الهدف', 'قائمة المعلّق والمدفوع', 'رؤى (رسوم بيانية وتقرير)', 'أخرى'], downloadingDaywise: 'جارٍ تنزيل سجلك اليومي.', downloadingGoalwise: 'جارٍ تنزيل سجلك حسب الهدف.', pickGoalForReport: 'إليك أهدافك النشطة — اختر واحدًا لتقرير المعلّق والمدفوع.', generatingInsights: 'جارٍ إنشاء تقرير الرؤى الخاص بك.' },
+  ru: { intro: 'Я не совсем понял, что вы хотите сделать в разделе Бухгалтерия. Пожалуйста, выберите вариант:', options: ['Посмотреть общую собранную сумму', 'Скачать общую сумму — по дням', 'Скачать общую сумму — по целям', 'Список Ожидает и Оплачено', 'Аналитика (графики и отчёт)', 'Другое'], downloadingDaywise: 'Скачиваю вашу книгу по дням.', downloadingGoalwise: 'Скачиваю вашу книгу по целям.', pickGoalForReport: 'Вот ваши активные цели — выберите одну для отчёта «Ожидает и Оплачено».', generatingInsights: 'Формирую ваш отчёт с аналитикой.' },
+  pt: { intro: 'Não tenho certeza do que você gostaria de fazer na Contabilidade. Por favor, escolha uma opção:', options: ['Ver o valor total arrecadado', 'Baixar total arrecadado — por dia', 'Baixar total arrecadado — por meta', 'Lista de Pendentes e Pagos', 'Insights (gráficos e relatório)', 'Outra coisa'], downloadingDaywise: 'Baixando seu livro diário.', downloadingGoalwise: 'Baixando seu livro por meta.', pickGoalForReport: 'Aqui estão suas metas ativas — escolha uma para o relatório de pendentes e pagos.', generatingInsights: 'Gerando seu relatório de insights.' },
+  zh: { intro: '我不太确定您想在账务中做什么。请选择一项：', options: ['查看已收总金额', '下载已收总额 — 按日', '下载已收总额 — 按目标', '待处理与已付款列表', '洞察（图表与报告）', '其他'], downloadingDaywise: '正在下载您的按日账本。', downloadingGoalwise: '正在下载您的按目标账本。', pickGoalForReport: '以下是您的活跃目标 — 选择一个用于待处理与已付款报告。', generatingInsights: '正在生成您的洞察报告。' }
+};
+
+const ACCOUNTING_OPTION_KEYWORDS = {
+  en: { 1: /\btotal\b/i, 2: /\bday\b|\bdaywise\b/i, 3: /\bgoal\b|\bgoalwise\b/i, 4: /\bpending\b|\bpaid\b/i, 5: /\binsights?\b/i, 6: /\b(something else|not covered|other|claude|ai)\b/i },
+  de: { 1: /\bgesamt/i, 2: /\btag\b/i, 3: /\bziel\b/i, 4: /\bausstehend\b|\bbezahlt\b/i, 5: /\beinblick/i, 6: /\b(sonstiges|etwas anderes|andere|claude|ai)\b/i },
+  fr: { 1: /\btotal\b/i, 2: /\bjour\b/i, 3: /\bobjectif\b/i, 4: /\battente\b|\bpayé\b/i, 5: /\baperçus?\b/i, 6: /\b(autre chose|autre|claude|ai)\b/i },
+  es: { 1: /\btotal\b/i, 2: /\bd[ií]a\b/i, 3: /\bmeta\b/i, 4: /\bpendientes?\b|\bpagados?\b/i, 5: /\bperspectivas?\b/i, 6: /\b(otra cosa|otro|claude|ai)\b/i },
+  ar: { 1: /إجمالي/, 2: /يومي/, 3: /هدف/, 4: /معلّق|مدفوع/, 5: /رؤى/, 6: /أخرى|claude|ai/i },
+  ru: { 1: /общ/i, 2: /дн[яеьи]/i, 3: /цел/i, 4: /ожидает|оплачено/i, 5: /аналитик/i, 6: /другое|claude|ai/i },
+  pt: { 1: /\btotal\b/i, 2: /\bdia\b/i, 3: /\bmeta\b/i, 4: /\bpendentes?\b|\bpagos?\b/i, 5: /\binsights?\b/i, 6: /\b(outra coisa|outro|claude|ai)\b/i },
+  zh: { 1: /总/, 2: /按日/, 3: /按目标/, 4: /待处理|已付款/, 5: /洞察/, 6: /其他|claude|ai/i }
+};
+
+const ACCOUNTING_TOPIC_RE = { en: /\baccounting\b|\baccounts?\b/i, de: /\bbuchhaltung\b/i, fr: /\bcomptabilit[ée]\b/i, es: /\bcontabilidad\b/i, ar: /محاسبة/, ru: /бухгалтери/i, pt: /\bcontabilidade\b/i, zh: /账务|财务/ };
+
+function accountingMenuQuestion() {
+  const t = ACCOUNTING_MENU_TEXT[currentLang] || ACCOUNTING_MENU_TEXT.en;
+  return `${t.intro}\n${t.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`;
+}
+
+const ACCOUNTING_MENU_RE = new RegExp(
+  Object.values(ACCOUNTING_MENU_TEXT).map(t => escapeRegExp(t.intro)).join('|'),
+  'i'
+);
 PENDING_FLOW_MARKERS.push(ACCOUNTING_MENU_RE);
 
 function parseAccountingFallbackMenu(msg, history) {
   const safeHistory = Array.isArray(history) ? history : [];
   const lastAssistant = [...safeHistory].reverse().find(h => h.role === 'assistant');
+  const kw = ACCOUNTING_OPTION_KEYWORDS[currentLang] || ACCOUNTING_OPTION_KEYWORDS.en;
+  const t = ACCOUNTING_MENU_TEXT[currentLang] || ACCOUNTING_MENU_TEXT.en;
 
   if (lastAssistant && ACCOUNTING_MENU_RE.test(lastAssistant.content)) {
     const choice = msg.trim().toLowerCase();
@@ -1494,31 +1594,32 @@ function parseAccountingFallbackMenu(msg, history) {
     // buildReportQueryReply in AIAssistant.tsx) and pushed as a separate
     // message after this reply, so putting the menu text here would show
     // it BEFORE the answer instead of after.
-    if (/^1\b/.test(choice) || /\btotal\b/i.test(choice)) {
+    if (/^1\b/.test(choice) || kw[1].test(choice)) {
       return { reply: '', action: { type: 'report_query', params: { metric: 'total_collected' } }, handled: true };
     }
-    if (/^2\b/.test(choice) || /\bday\b|\bdaywise\b/i.test(choice)) {
-      return { reply: `Downloading your day-wise ledger.\n\n${ACCOUNTING_MENU_QUESTION}`, action: { type: 'download_daywise_ledger', params: {} }, handled: true };
+    if (/^2\b/.test(choice) || kw[2].test(choice)) {
+      return { reply: `${t.downloadingDaywise}\n\n${accountingMenuQuestion()}`, action: { type: 'download_daywise_ledger', params: {} }, handled: true };
     }
-    if (/^3\b/.test(choice) || /\bgoal\b|\bgoalwise\b/i.test(choice)) {
-      return { reply: `Downloading your goal-wise ledger.\n\n${ACCOUNTING_MENU_QUESTION}`, action: { type: 'download_goalwise_ledger', params: {} }, handled: true };
+    if (/^3\b/.test(choice) || kw[3].test(choice)) {
+      return { reply: `${t.downloadingGoalwise}\n\n${accountingMenuQuestion()}`, action: { type: 'download_goalwise_ledger', params: {} }, handled: true };
     }
-    if (/^4\b/.test(choice) || /\bpending\b|\bpaid\b/i.test(choice)) {
-      return { reply: `Here are your active goals — pick one for the pending & paid report.\n\n${ACCOUNTING_MENU_QUESTION}`, action: { type: 'list_goals_for_report', params: {} }, handled: true };
+    if (/^4\b/.test(choice) || kw[4].test(choice)) {
+      return { reply: `${t.pickGoalForReport}\n\n${accountingMenuQuestion()}`, action: { type: 'list_goals_for_report', params: {} }, handled: true };
     }
-    if (/^5\b/.test(choice) || /\binsights?\b/i.test(choice)) {
-      return { reply: `Generating your insights report.\n\n${ACCOUNTING_MENU_QUESTION}`, action: { type: 'download_insights_report', params: {} }, handled: true };
+    if (/^5\b/.test(choice) || kw[5].test(choice)) {
+      return { reply: `${t.generatingInsights}\n\n${accountingMenuQuestion()}`, action: { type: 'download_insights_report', params: {} }, handled: true };
     }
-    if (/^6\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
-      return { reply: ANY_OTHER_ASK_TEXT, handled: true };
+    if (/^6\b/.test(choice) || kw[6].test(choice)) {
+      return { reply: anyOtherAskText(), handled: true };
     }
 
     // Unrecognized reply to the menu — re-ask rather than guess.
-    return { reply: ACCOUNTING_MENU_QUESTION, handled: true };
+    return { reply: accountingMenuQuestion(), handled: true };
   }
 
-  if (!HOW_TO_RE.test(msg) && /\baccounting\b|\baccounts?\b/i.test(msg)) {
-    return { reply: ACCOUNTING_MENU_QUESTION, handled: true };
+  const topicRe = ACCOUNTING_TOPIC_RE[currentLang] || ACCOUNTING_TOPIC_RE.en;
+  if (!HOW_TO_RE.test(msg) && topicRe.test(msg)) {
+    return { reply: accountingMenuQuestion(), handled: true };
   }
 
   return null;
@@ -1558,11 +1659,11 @@ const ROOT_OPTION_LABELS = { 1: 'Goals', 2: 'Subscribers', 3: 'Pending/Missed', 
 function rootOptionResult(num) {
   const t = ROOT_MENU_TEXT[currentLang] || ROOT_MENU_TEXT.en;
   switch (num) {
-    case 1: return { reply: GOAL_MENU_QUESTION, handled: true };
-    case 2: return { reply: SUBSCRIBER_MENU_QUESTION, handled: true };
+    case 1: return { reply: goalMenuQuestion(), handled: true };
+    case 2: return { reply: subscriberMenuQuestion(), handled: true };
     case 3: return { reply: `${t.openingPending}\n\n${rootMenuQuestion(currentLang)}`, action: { type: 'view_pending', params: {} }, handled: true };
-    case 4: return { reply: ACCOUNTING_MENU_QUESTION, handled: true };
-    case 5: return { reply: ANY_OTHER_ASK_TEXT, handled: true };
+    case 4: return { reply: accountingMenuQuestion(), handled: true };
+    case 5: return { reply: anyOtherAskText(), handled: true };
     default: return null;
   }
 }
@@ -1628,15 +1729,51 @@ function parseBareNumberLookup(msg, history) {
 // existing confirmation card (shown by the frontend before Confirm is
 // clicked), not by anything the backend needs to compute itself.
 // ---------------------------------------------------------------
-const COLLECT_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do regarding a payment. Please choose one:\n1. Collect payment (generate a payment link)\n2. Download the receipt\n3. Delete the payment/receipt\n4. How to pay the amount\n5. Something else';
-const COLLECT_MENU_RE = /i'm not quite sure what you'd like to do regarding a payment\. please choose one:/i;
-PENDING_FLOW_MARKERS.push(COLLECT_MENU_RE);
+// Options 1/2's reply text below stays English literal on purpose —
+// PAYMENT_LINK_WHO_RE/DOWNLOAD_RECEIPT_MOBILE_RE match that exact text
+// elsewhere and hand off into their own (not-yet-localized) flows. Only
+// the menu itself, picking an option, and the terminal options (3/4/5,
+// which loop back to this same menu) are fully localized.
+const COLLECT_MENU_TEXT = {
+  en: { intro: 'I\'m not quite sure what you\'d like to do regarding a payment. Please choose one:', options: ['Collect payment (generate a payment link)', 'Download the receipt', 'Delete the payment/receipt', 'How to pay the amount', 'Something else'], howto: 'Open the relevant goal or subscriber (or the Pending tab) -> "Collect Payment" -> enter the amount -> Save. Or just say "collect 500 from <name> for <goal>" and I\'ll do it for you.' },
+  de: { intro: 'Ich bin nicht ganz sicher, was Sie bezüglich einer Zahlung tun möchten. Bitte wählen Sie eine Option:', options: ['Zahlung einziehen (Zahlungslink erstellen)', 'Beleg herunterladen', 'Zahlung/Beleg löschen', 'Wie der Betrag bezahlt wird', 'Etwas anderes'], howto: 'Öffnen Sie das betreffende Ziel oder den Abonnenten (oder den Tab Ausstehend) -> "Zahlung einziehen" -> Betrag eingeben -> Speichern. Oder sagen Sie einfach "500 von <Name> für <Ziel> einziehen" und ich erledige es für Sie.' },
+  fr: { intro: 'Je ne suis pas sûr de ce que vous souhaitez faire concernant un paiement. Veuillez choisir une option :', options: ['Encaisser un paiement (générer un lien de paiement)', 'Télécharger le reçu', 'Supprimer le paiement/reçu', 'Comment payer le montant', 'Autre chose'], howto: 'Ouvrez l\'objectif ou l\'abonné concerné (ou l\'onglet En attente) -> "Encaisser un paiement" -> saisissez le montant -> Enregistrer. Ou dites simplement "encaisser 500 de <nom> pour <objectif>" et je le ferai pour vous.' },
+  es: { intro: 'No estoy seguro de qué quieres hacer con un pago. Elige una opción:', options: ['Cobrar pago (generar un enlace de pago)', 'Descargar el recibo', 'Eliminar el pago/recibo', 'Cómo pagar el monto', 'Otra cosa'], howto: 'Abre la meta o el suscriptor correspondiente (o la pestaña Pendientes) -> "Cobrar pago" -> ingresa el monto -> Guardar. O simplemente di "cobrar 500 de <nombre> para <meta>" y lo haré por ti.' },
+  ar: { intro: 'لست متأكدًا تمامًا مما تريد فعله بخصوص دفعة. يرجى اختيار خيار:', options: ['تحصيل دفعة (إنشاء رابط دفع)', 'تنزيل الإيصال', 'حذف الدفعة/الإيصال', 'كيفية دفع المبلغ', 'شيء آخر'], howto: 'افتح الهدف أو المشترك المعني (أو تبويب المعلّق) -> "تحصيل دفعة" -> أدخل المبلغ -> حفظ. أو فقط قل "حصّل 500 من <الاسم> مقابل <الهدف>" وسأقوم بذلك نيابة عنك.' },
+  ru: { intro: 'Я не совсем понял, что вы хотите сделать с платежом. Пожалуйста, выберите вариант:', options: ['Принять платёж (создать ссылку на оплату)', 'Скачать квитанцию', 'Удалить платёж/квитанцию', 'Как оплатить сумму', 'Другое'], howto: 'Откройте нужную цель или подписчика (или вкладку «Ожидает») -> «Принять платёж» -> введите сумму -> Сохранить. Или просто скажите «принять 500 от <имя> за <цель>», и я сделаю это за вас.' },
+  pt: { intro: 'Não tenho certeza do que você gostaria de fazer em relação a um pagamento. Por favor, escolha uma opção:', options: ['Cobrar pagamento (gerar um link de pagamento)', 'Baixar o recibo', 'Excluir o pagamento/recibo', 'Como pagar o valor', 'Outra coisa'], howto: 'Abra a meta ou o assinante relevante (ou a aba Pendentes) -> "Cobrar pagamento" -> insira o valor -> Salvar. Ou apenas diga "cobrar 500 de <nome> para <meta>" e eu faço por você.' },
+  zh: { intro: '我不太确定您想对付款做什么。请选择一项：', options: ['收款（生成付款链接）', '下载收据', '删除付款/收据', '如何支付金额', '其他'], howto: '打开相关目标或订阅者（或"待处理"标签页）-> "收款" -> 输入金额 -> 保存。或者直接说"从<姓名>收<目标>的500"，我会为您完成。' }
+};
 
-const COLLECT_MENU_HOWTO_REPLY = 'Open the relevant goal or subscriber (or the Pending tab) -> "Collect Payment" -> enter the amount -> Save. Or just say "collect 500 from <name> for <goal>" and I\'ll do it for you.';
+const COLLECT_OPTION_KEYWORDS = {
+  en: { 1: /\bcollect\b/i, 2: /\breceipt\b|\bdownload\b/i, 3: /\bdelete\b/i, 4: /\bhow\b/i, 5: /\b(something else|not covered|other|claude|ai)\b/i },
+  de: { 1: /\beinzieh/i, 2: /\bbeleg\b|\bherunterlad/i, 3: /\blösch/i, 4: /\bwie\b/i, 5: /\b(etwas anderes|sonstiges|andere|claude|ai)\b/i },
+  fr: { 1: /\bencaiss/i, 2: /\breçu\b|\btélécharg/i, 3: /\bsupprim/i, 4: /\bcomment\b/i, 5: /\b(autre chose|autre|claude|ai)\b/i },
+  es: { 1: /\bcobrar\b/i, 2: /\brecibo\b|\bdescargar\b/i, 3: /\beliminar\b/i, 4: /\bc[oó]mo\b/i, 5: /\b(otra cosa|otro|claude|ai)\b/i },
+  ar: { 1: /تحصيل/, 2: /إيصال|تنزيل/, 3: /حذف/, 4: /كيف/, 5: /آخر|claude|ai/i },
+  ru: { 1: /прин[яи]/i, 2: /квитанц/i, 3: /удал/i, 4: /как/i, 5: /другое|claude|ai/i },
+  pt: { 1: /\bcobrar\b/i, 2: /\brecibo\b|\bbaixar\b/i, 3: /\bexcluir\b/i, 4: /\bcomo\b/i, 5: /\b(outra coisa|outro|claude|ai)\b/i },
+  zh: { 1: /收款/, 2: /收据|下载/, 3: /删除/, 4: /如何/, 5: /其他|claude|ai/i }
+};
+
+const COLLECT_TOPIC_RE = { en: /\bcollect(?:ed|ing)?\b/i, de: /\beinzieh|\beingezogen/i, fr: /\bencaiss/i, es: /\bcobrar\b|\bcobrad/i, ar: /تحصيل/, ru: /прин[яи]/i, pt: /\bcobrar\b|\bcobranç/i, zh: /收款|收取/ };
+
+function collectMenuQuestion() {
+  const t = COLLECT_MENU_TEXT[currentLang] || COLLECT_MENU_TEXT.en;
+  return `${t.intro}\n${t.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`;
+}
+
+const COLLECT_MENU_RE = new RegExp(
+  Object.values(COLLECT_MENU_TEXT).map(t => escapeRegExp(t.intro)).join('|'),
+  'i'
+);
+PENDING_FLOW_MARKERS.push(COLLECT_MENU_RE);
 
 function parseCollectFallbackMenu(msg, history) {
   const safeHistory = Array.isArray(history) ? history : [];
   const lastAssistant = [...safeHistory].reverse().find(h => h.role === 'assistant');
+  const kw = COLLECT_OPTION_KEYWORDS[currentLang] || COLLECT_OPTION_KEYWORDS.en;
+  const t = COLLECT_MENU_TEXT[currentLang] || COLLECT_MENU_TEXT.en;
 
   if (lastAssistant && COLLECT_MENU_RE.test(lastAssistant.content)) {
     const choice = msg.trim().toLowerCase();
@@ -1646,29 +1783,30 @@ function parseCollectFallbackMenu(msg, history) {
     // are terminal (1 and 2 hand off into their own multi-step flows) — the
     // menu is re-appended after each terminal reply so the next pick still
     // has something to match against instead of falling through to Claude.
-    if (/^3\b/.test(choice) || /\bdelete\b/i.test(choice)) {
+    if (/^3\b/.test(choice) || kw[3].test(choice)) {
       const deleteResult = handleDeleteIntent('delete payment');
-      return { reply: `${deleteResult.reply}\n\n${COLLECT_MENU_QUESTION}`, handled: true };
+      return { reply: `${deleteResult.reply}\n\n${collectMenuQuestion()}`, handled: true };
     }
-    if (/^1\b/.test(choice) || /\bcollect\b/i.test(choice)) {
+    if (/^1\b/.test(choice) || kw[1].test(choice)) {
       return { reply: 'Great — what\'s the subscriber\'s mobile number so I can look up their due and generate the link?', handled: true };
     }
-    if (/^2\b/.test(choice) || /\breceipt\b|\bdownload\b/i.test(choice)) {
+    if (/^2\b/.test(choice) || kw[2].test(choice)) {
       return { reply: 'Great — what\'s the subscriber\'s mobile number so I can find their receipt?', handled: true };
     }
-    if (/^4\b/.test(choice) || /\bhow\b/i.test(choice)) {
-      return { reply: `${COLLECT_MENU_HOWTO_REPLY}\n\n${COLLECT_MENU_QUESTION}`, handled: true };
+    if (/^4\b/.test(choice) || kw[4].test(choice)) {
+      return { reply: `${t.howto}\n\n${collectMenuQuestion()}`, handled: true };
     }
-    if (/^5\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
-      return { reply: ANY_OTHER_ASK_TEXT, handled: true };
+    if (/^5\b/.test(choice) || kw[5].test(choice)) {
+      return { reply: anyOtherAskText(), handled: true };
     }
 
     // Unrecognized reply to the menu — re-ask rather than guess.
-    return { reply: COLLECT_MENU_QUESTION, handled: true };
+    return { reply: collectMenuQuestion(), handled: true };
   }
 
-  if (!HOW_TO_RE.test(msg) && /\bcollect(?:ed|ing)?\b/i.test(msg)) {
-    return { reply: COLLECT_MENU_QUESTION, handled: true };
+  const topicRe = COLLECT_TOPIC_RE[currentLang] || COLLECT_TOPIC_RE.en;
+  if (!HOW_TO_RE.test(msg) && topicRe.test(msg)) {
+    return { reply: collectMenuQuestion(), handled: true };
   }
 
   return null;
@@ -1696,11 +1834,45 @@ function parseCollectFallbackMenu(msg, history) {
 // "not covered above" line — treated here as a 6th option, since escalating
 // to Claude needs its own slot distinct from "edit subscriber details".
 // ---------------------------------------------------------------
-const SUBSCRIBER_MENU_QUESTION = 'I\'m not quite sure what you\'d like to do with a subscriber. Please choose one:\n1. Add subscriber\n2. View subscriber details\n3. Delete/remove the subscriber\n4. How to add a subscriber\n5. Edit subscriber details\n6. Something else';
-const SUBSCRIBER_MENU_RE = /i'm not quite sure what you'd like to do with a subscriber\. please choose one:/i;
-PENDING_FLOW_MARKERS.push(SUBSCRIBER_MENU_RE);
+// Options 1/5's reply text below stays English literal on purpose —
+// ADD_SUBSCRIBER_NAME_RE/EDIT_DETAILS_NAME_MOBILE_RE match that exact
+// text elsewhere and hand off into their own (not-yet-localized) flows.
+// Only the menu itself, picking an option, and the terminal options
+// (2/3/4/6, which loop back to this same menu) are fully localized.
+const SUBSCRIBER_MENU_TEXT = {
+  en: { intro: 'I\'m not quite sure what you\'d like to do with a subscriber. Please choose one:', options: ['Add subscriber', 'View subscriber details', 'Delete/remove the subscriber', 'How to add a subscriber', 'Edit subscriber details', 'Something else'], openingDetails: 'Opening Subscriber Details for you.', howto: 'Sidebar -> Subscribers -> "+ Add" -> enter a name and mobile number -> Save. Or just say "add a subscriber" and I\'ll walk you through it.' },
+  de: { intro: 'Ich bin nicht ganz sicher, was Sie mit einem Abonnenten tun möchten. Bitte wählen Sie eine Option:', options: ['Abonnent hinzufügen', 'Abonnentendetails anzeigen', 'Abonnenten löschen/entfernen', 'Wie man einen Abonnenten hinzufügt', 'Abonnentendetails bearbeiten', 'Etwas anderes'], openingDetails: 'Öffne Abonnentendetails für Sie.', howto: 'Seitenleiste -> Abonnenten -> "+ Hinzufügen" -> Name und Mobilnummer eingeben -> Speichern. Oder sagen Sie einfach "Abonnent hinzufügen" und ich führe Sie durch.' },
+  fr: { intro: 'Je ne suis pas sûr de ce que vous souhaitez faire avec un abonné. Veuillez choisir une option :', options: ['Ajouter un abonné', 'Voir les détails de l\'abonné', 'Supprimer/retirer l\'abonné', 'Comment ajouter un abonné', 'Modifier les détails de l\'abonné', 'Autre chose'], openingDetails: 'Ouverture des détails de l\'abonné pour vous.', howto: 'Barre latérale -> Abonnés -> "+ Ajouter" -> saisissez un nom et un numéro de mobile -> Enregistrer. Ou dites simplement "ajouter un abonné" et je vous guiderai.' },
+  es: { intro: 'No estoy seguro de qué quieres hacer con un suscriptor. Elige una opción:', options: ['Agregar suscriptor', 'Ver detalles del suscriptor', 'Eliminar/quitar al suscriptor', 'Cómo agregar un suscriptor', 'Editar detalles del suscriptor', 'Otra cosa'], openingDetails: 'Abriendo los detalles del suscriptor para ti.', howto: 'Barra lateral -> Suscriptores -> "+ Agregar" -> ingresa un nombre y número de móvil -> Guardar. O simplemente di "agregar un suscriptor" y te guiaré.' },
+  ar: { intro: 'لست متأكدًا تمامًا مما تريد فعله بخصوص مشترك. يرجى اختيار خيار:', options: ['إضافة مشترك', 'عرض تفاصيل المشترك', 'حذف/إزالة المشترك', 'كيفية إضافة مشترك', 'تعديل تفاصيل المشترك', 'شيء آخر'], openingDetails: 'يتم فتح تفاصيل المشترك من أجلك.', howto: 'الشريط الجانبي -> المشتركون -> "+ إضافة" -> أدخل الاسم ورقم الجوال -> حفظ. أو فقط قل "إضافة مشترك" وسأرشدك خطوة بخطوة.' },
+  ru: { intro: 'Я не совсем понял, что вы хотите сделать с подписчиком. Пожалуйста, выберите вариант:', options: ['Добавить подписчика', 'Посмотреть данные подписчика', 'Удалить/убрать подписчика', 'Как добавить подписчика', 'Изменить данные подписчика', 'Другое'], openingDetails: 'Открываю данные подписчика для вас.', howto: 'Боковая панель -> Подписчики -> «+ Добавить» -> введите имя и номер мобильного -> Сохранить. Или просто скажите «добавить подписчика», и я вас проведу.' },
+  pt: { intro: 'Não tenho certeza do que você gostaria de fazer com um assinante. Por favor, escolha uma opção:', options: ['Adicionar assinante', 'Ver detalhes do assinante', 'Excluir/remover o assinante', 'Como adicionar um assinante', 'Editar detalhes do assinante', 'Outra coisa'], openingDetails: 'Abrindo os detalhes do assinante para você.', howto: 'Barra lateral -> Assinantes -> "+ Adicionar" -> insira um nome e número de celular -> Salvar. Ou apenas diga "adicionar um assinante" e eu te guio.' },
+  zh: { intro: '我不太确定您想对订阅者做什么。请选择一项：', options: ['添加订阅者', '查看订阅者详情', '删除/移除订阅者', '如何添加订阅者', '编辑订阅者详情', '其他'], openingDetails: '正在为您打开订阅者详情。', howto: '侧边栏 -> 订阅者 -> "+ 添加" -> 输入姓名和手机号 -> 保存。或者直接说"添加订阅者"，我会引导您完成。' }
+};
 
-const SUBSCRIBER_MENU_HOWTO_REPLY = 'Sidebar -> Subscribers -> "+ Add" -> enter a name and mobile number -> Save. Or just say "add a subscriber" and I\'ll walk you through it.';
+const SUBSCRIBER_OPTION_KEYWORDS = {
+  en: { 1: /\badd\b/i, 2: /\bview\b|\bdetails\b/i, 3: /\b(delete|remove)\b/i, 4: /\bhow\b/i, 5: /\bedit\b/i, 6: /\b(something else|not covered|other|claude|ai)\b/i },
+  de: { 1: /\bhinzufüg/i, 2: /\banzeig|\bdetails\b/i, 3: /\blösch|\bentfern/i, 4: /\bwie\b/i, 5: /\bbearbeit/i, 6: /\b(etwas anderes|sonstiges|andere|claude|ai)\b/i },
+  fr: { 1: /\bajout/i, 2: /\bvoir\b|\bd[ée]tails\b/i, 3: /\bsupprim|\bretir/i, 4: /\bcomment\b/i, 5: /\bmodifi/i, 6: /\b(autre chose|autre|claude|ai)\b/i },
+  es: { 1: /\bagregar\b/i, 2: /\bver\b|\bdetalles\b/i, 3: /\beliminar\b|\bquitar\b/i, 4: /\bc[oó]mo\b/i, 5: /\beditar\b/i, 6: /\b(otra cosa|otro|claude|ai)\b/i },
+  ar: { 1: /إضافة/, 2: /عرض|تفاصيل/, 3: /حذف|إزالة/, 4: /كيف/, 5: /تعديل/, 6: /آخر|claude|ai/i },
+  ru: { 1: /добав/i, 2: /просмотр|данные/i, 3: /удал|убрать/i, 4: /как/i, 5: /изменить/i, 6: /другое|claude|ai/i },
+  pt: { 1: /\badicionar\b/i, 2: /\bver\b|\bdetalhes\b/i, 3: /\bexcluir\b|\bremover\b/i, 4: /\bcomo\b/i, 5: /\beditar\b/i, 6: /\b(outra coisa|outro|claude|ai)\b/i },
+  zh: { 1: /添加/, 2: /查看|详情/, 3: /删除|移除/, 4: /如何/, 5: /编辑/, 6: /其他|claude|ai/i }
+};
+
+const SUBSCRIBER_TOPIC_RE = { en: /\bsubscribers?\b/i, de: /\babonnent(en)?\b/i, fr: /\babonn[ée]s?\b/i, es: /\bsuscriptor(es)?\b/i, ar: /مشترك/, ru: /подписчик/i, pt: /\bassinante(s)?\b/i, zh: /订阅者|订阅/ };
+
+function subscriberMenuQuestion() {
+  const t = SUBSCRIBER_MENU_TEXT[currentLang] || SUBSCRIBER_MENU_TEXT.en;
+  return `${t.intro}\n${t.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`;
+}
+
+const SUBSCRIBER_MENU_RE = new RegExp(
+  Object.values(SUBSCRIBER_MENU_TEXT).map(t => escapeRegExp(t.intro)).join('|'),
+  'i'
+);
+PENDING_FLOW_MARKERS.push(SUBSCRIBER_MENU_RE);
 
 const EDIT_DETAILS_NAME_MOBILE_RE = /^great — what's the subscriber's name and mobile number, so i can look up their details\?$/i;
 const EDIT_DETAILS_WHAT_RE = /^here are (.+?)'s details — check the panel that just opened\. what would you like to change: name, mobile number, or unsubscribe from a goal\?$/i;
@@ -1744,6 +1916,8 @@ function parseEditSubscriberDetailsLookup(msg, history) {
 function parseSubscriberFallbackMenu(msg, history) {
   const safeHistory = Array.isArray(history) ? history : [];
   const lastAssistant = [...safeHistory].reverse().find(h => h.role === 'assistant');
+  const kw = SUBSCRIBER_OPTION_KEYWORDS[currentLang] || SUBSCRIBER_OPTION_KEYWORDS.en;
+  const t = SUBSCRIBER_MENU_TEXT[currentLang] || SUBSCRIBER_MENU_TEXT.en;
 
   if (lastAssistant && SUBSCRIBER_MENU_RE.test(lastAssistant.content)) {
     const choice = msg.trim().toLowerCase();
@@ -1754,32 +1928,33 @@ function parseSubscriberFallbackMenu(msg, history) {
     // flows) — the menu is re-appended after each so the next pick still
     // has the menu question to match against instead of falling through
     // to Claude.
-    if (/^3\b/.test(choice) || /\b(delete|remove)\b/i.test(choice)) {
+    if (/^3\b/.test(choice) || kw[3].test(choice)) {
       const deleteResult = handleDeleteIntent('delete subscriber');
-      return { reply: `${deleteResult.reply}\n\n${SUBSCRIBER_MENU_QUESTION}`, handled: true };
+      return { reply: `${deleteResult.reply}\n\n${subscriberMenuQuestion()}`, handled: true };
     }
-    if (/^5\b/.test(choice) || /\bedit\b/i.test(choice)) {
+    if (/^5\b/.test(choice) || kw[5].test(choice)) {
       return { reply: 'Great — what\'s the subscriber\'s name and mobile number, so I can look up their details?', handled: true };
     }
-    if (/^1\b/.test(choice) || /\badd\b/i.test(choice)) {
+    if (/^1\b/.test(choice) || kw[1].test(choice)) {
       return { reply: 'Great — what\'s the subscriber\'s name?', handled: true };
     }
-    if (/^2\b/.test(choice) || /\bview\b|\bdetails\b/i.test(choice)) {
-      return { reply: `Opening Subscriber Details for you.\n\n${SUBSCRIBER_MENU_QUESTION}`, action: { type: 'view_subscriber_details', params: {} }, handled: true };
+    if (/^2\b/.test(choice) || kw[2].test(choice)) {
+      return { reply: `${t.openingDetails}\n\n${subscriberMenuQuestion()}`, action: { type: 'view_subscriber_details', params: {} }, handled: true };
     }
-    if (/^4\b/.test(choice) || /\bhow\b/i.test(choice)) {
-      return { reply: `${SUBSCRIBER_MENU_HOWTO_REPLY}\n\n${SUBSCRIBER_MENU_QUESTION}`, handled: true };
+    if (/^4\b/.test(choice) || kw[4].test(choice)) {
+      return { reply: `${t.howto}\n\n${subscriberMenuQuestion()}`, handled: true };
     }
-    if (/^6\b/.test(choice) || /\b(something else|not covered|other|claude|ai)\b/i.test(choice)) {
-      return { reply: ANY_OTHER_ASK_TEXT, handled: true };
+    if (/^6\b/.test(choice) || kw[6].test(choice)) {
+      return { reply: anyOtherAskText(), handled: true };
     }
 
     // Unrecognized reply to the menu — re-ask rather than guess.
-    return { reply: SUBSCRIBER_MENU_QUESTION, handled: true };
+    return { reply: subscriberMenuQuestion(), handled: true };
   }
 
-  if (!HOW_TO_RE.test(msg) && /\bsubscribers?\b/i.test(msg)) {
-    return { reply: SUBSCRIBER_MENU_QUESTION, handled: true };
+  const topicRe = SUBSCRIBER_TOPIC_RE[currentLang] || SUBSCRIBER_TOPIC_RE.en;
+  if (!HOW_TO_RE.test(msg) && topicRe.test(msg)) {
+    return { reply: subscriberMenuQuestion(), handled: true };
   }
 
   return null;
