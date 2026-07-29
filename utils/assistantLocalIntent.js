@@ -19,6 +19,24 @@
 // routes/web/tickets.js, lib/gateways.js) — duplicated here so the local
 // parser can validate/resolve without an extra round trip.
 const EXPENSE_CATEGORIES = ['Utility Bills', 'Staff Salaries', 'Maintenance', 'Cleaning', 'Office Expenses', 'Event Expenses', 'Construction & Renovation', 'Equipment Purchases', 'Charity Payments', 'Miscellaneous'];
+// Display/recognition names in each UI language, positionally paired with
+// EXPENSE_CATEGORIES above — matchExpenseCategory() accepts any language's
+// name but always returns the canonical English string, since that's what
+// the backend (routes/web/expenses.js) stores/expects.
+const EXPENSE_CATEGORY_TRANSLATIONS = {
+  en: EXPENSE_CATEGORIES,
+  de: ['Nebenkosten', 'Personalgehälter', 'Wartung', 'Reinigung', 'Bürokosten', 'Veranstaltungskosten', 'Bau & Renovierung', 'Ausrüstungskäufe', 'Wohltätigkeitszahlungen', 'Sonstiges'],
+  fr: ['Factures de services', 'Salaires du personnel', 'Entretien', 'Nettoyage', 'Frais de bureau', 'Frais d\'événement', 'Construction et rénovation', 'Achats d\'équipement', 'Paiements caritatifs', 'Divers'],
+  es: ['Facturas de servicios', 'Salarios del personal', 'Mantenimiento', 'Limpieza', 'Gastos de oficina', 'Gastos de eventos', 'Construcción y renovación', 'Compras de equipo', 'Pagos de caridad', 'Varios'],
+  ar: ['فواتير الخدمات', 'رواتب الموظفين', 'الصيانة', 'التنظيف', 'مصاريف المكتب', 'مصاريف الفعاليات', 'البناء والتجديد', 'شراء المعدات', 'مدفوعات خيرية', 'متفرقات'],
+  ru: ['Коммунальные платежи', 'Зарплаты персонала', 'Обслуживание', 'Уборка', 'Офисные расходы', 'Расходы на мероприятия', 'Строительство и ремонт', 'Покупка оборудования', 'Благотворительные платежи', 'Разное'],
+  pt: ['Contas de serviços', 'Salários da equipe', 'Manutenção', 'Limpeza', 'Despesas de escritório', 'Despesas de eventos', 'Construção e reforma', 'Compras de equipamentos', 'Pagamentos de caridade', 'Diversos'],
+  zh: ['水电费', '员工工资', '维护', '清洁', '办公费用', '活动费用', '建筑与翻新', '设备采购', '慈善捐款', '其他']
+};
+
+function expenseCategoryNames() {
+  return EXPENSE_CATEGORY_TRANSLATIONS[currentLang] || EXPENSE_CATEGORIES;
+}
 const TICKET_CATEGORIES = ['billing', 'collection', 'receipt_pdf', 'import_subscribers', 'other'];
 const SUPPORTED_CURRENCIES = ['INR', 'USD', 'GBP', 'EUR', 'AUD', 'CAD', 'SGD', 'AED', 'NZD', 'CHF', 'ZAR', 'MYR', 'SAR', 'HKD'];
 const CURRENCY_WORDS = {
@@ -219,8 +237,16 @@ function extractBareOrAtAmount(msg) {
 
 function matchExpenseCategory(text) {
   const norm = text.toLowerCase();
-  const found = EXPENSE_CATEGORIES.find(c => norm.includes(c.toLowerCase()) || c.toLowerCase().includes(norm.trim()));
-  return found || null;
+  // Tries the current language's names first, then every other language's
+  // (mirrors execFlowAnyLang's robustness) — always returns the canonical
+  // English name regardless of which language matched.
+  const order = [currentLang, ...Object.keys(EXPENSE_CATEGORY_TRANSLATIONS).filter(l => l !== currentLang)];
+  for (const lang of order) {
+    const names = EXPENSE_CATEGORY_TRANSLATIONS[lang] || EXPENSE_CATEGORIES;
+    const idx = names.findIndex(c => norm.includes(c.toLowerCase()) || c.toLowerCase().includes(norm.trim()));
+    if (idx !== -1) return EXPENSE_CATEGORIES[idx];
+  }
+  return null;
 }
 
 function matchCurrency(text) {
@@ -692,9 +718,23 @@ function parseCreatePledge(msg, history) {
 }
 
 // Steps: confirm -> which goal. Fast path ("mark Diwali Fund as complete" /
-// "complete the Diwali Fund goal") still works in one shot.
-const MARK_COMPLETE_CONFIRM_RE = /are you saying you'd like to mark a goal (?:as )?complete/i;
-const MARK_COMPLETE_NAME_RE = /^great — which goal should i mark complete\?$/i;
+// "complete the Diwali Fund goal") is intentionally NOT localized — same
+// reasoning as SUBSCRIBE_RE/CREATE_PLEDGE_RE, a one-shot English sentence
+// shape that doesn't translate to a single regex across 8 languages;
+// non-English users still reach the same result via the fully localized
+// step-by-step flow below.
+const MARK_COMPLETE_TEXT = {
+  en: { confirm: 'Are you saying you\'d like to mark a goal complete?', askName: 'Great — which goal should I mark complete?', askNameEmpty: 'Which goal should I mark complete?' },
+  de: { confirm: 'Möchten Sie ein Ziel als abgeschlossen markieren?', askName: 'Gut — welches Ziel soll ich als abgeschlossen markieren?', askNameEmpty: 'Welches Ziel soll ich als abgeschlossen markieren?' },
+  fr: { confirm: 'Voulez-vous dire que vous souhaitez marquer un objectif comme terminé ?', askName: 'Très bien — quel objectif dois-je marquer comme terminé ?', askNameEmpty: 'Quel objectif dois-je marquer comme terminé ?' },
+  es: { confirm: '¿Quieres decir que te gustaría marcar una meta como completada?', askName: 'Genial — ¿qué meta debo marcar como completada?', askNameEmpty: '¿Qué meta debo marcar como completada?' },
+  ar: { confirm: 'هل تقصد أنك تريد وضع علامة على هدف كمكتمل؟', askName: 'رائع — ما الهدف الذي يجب أن أضع عليه علامة مكتمل؟', askNameEmpty: 'ما الهدف الذي يجب أن أضع عليه علامة مكتمل؟' },
+  ru: { confirm: 'Вы хотите отметить цель как завершённую?', askName: 'Отлично — какую цель отметить завершённой?', askNameEmpty: 'Какую цель отметить завершённой?' },
+  pt: { confirm: 'Você gostaria de marcar uma meta como concluída?', askName: 'Ótimo — qual meta devo marcar como concluída?', askNameEmpty: 'Qual meta devo marcar como concluída?' },
+  zh: { confirm: '您是想将一个目标标记为已完成吗？', askName: '好的 — 应该将哪个目标标记为已完成？', askNameEmpty: '应该将哪个目标标记为已完成？' }
+};
+const MARK_COMPLETE_CONFIRM_RE = new RegExp(Object.values(MARK_COMPLETE_TEXT).map(t => escapeRegExp(t.confirm)).join('|'), 'i');
+const MARK_COMPLETE_NAME_RE = new RegExp(Object.values(MARK_COMPLETE_TEXT).map(t => `^${escapeRegExp(t.askName)}$`).join('|'), 'i');
 PENDING_FLOW_MARKERS.push(MARK_COMPLETE_CONFIRM_RE, MARK_COMPLETE_NAME_RE);
 
 function parseMarkComplete(msg, history) {
@@ -712,26 +752,39 @@ function parseMarkComplete(msg, history) {
 
   if (lastAssistant && MARK_COMPLETE_NAME_RE.test(lastAssistant.content)) {
     const goalName = msg.replace(/[.?!]+$/, '').trim();
-    if (!goalName) return { reply: 'Which goal should I mark complete?', handled: true };
+    if (!goalName) return { reply: renderFlow(MARK_COMPLETE_TEXT, 'askNameEmpty'), handled: true };
     return { reply: 'Here\'s what I understood:', action: { type: 'mark_goal_complete', params: { goalName } }, handled: true };
   }
 
   if (lastAssistant && MARK_COMPLETE_CONFIRM_RE.test(lastAssistant.content)) {
     if (!AFFIRMATIVE_RE.test(msg)) return null;
-    return { reply: 'Great — which goal should I mark complete?', handled: true };
+    return { reply: renderFlow(MARK_COMPLETE_TEXT, 'askName'), handled: true };
   }
 
-  if (!HOW_TO_RE.test(msg) && /\bcomplete\b/i.test(msg) && /\bgoal\b|\bmark\b/i.test(msg)) {
-    return { reply: 'Are you saying you\'d like to mark a goal complete?', handled: true };
+  const completeWordRe = /\bcomplete\b|abgeschlossen|erledigt|terminé|complété|completad[oa]|completa|مكتمل|завершен|заверш|concluíd[oa]|完成/i;
+  const markOrGoalWordRe = /\bgoal\b|\bmark\b|\bziel\b|markier|\bobjectif\b|marquer|\bmeta\b|marcar|هدف|علامة|цел|отмет|目标|标记/i;
+  if (!HOW_TO_RE.test(msg) && completeWordRe.test(msg) && markOrGoalWordRe.test(msg)) {
+    return { reply: renderFlow(MARK_COMPLETE_TEXT, 'confirm'), handled: true };
   }
 
   return null;
 }
 
 // Steps: confirm -> which goal. Fast path ("stop Cleaning Charges from
-// rolling over" / "turn off rollover for Cleaning Charges") still works.
-const STOP_ROLLOVER_CONFIRM_RE = /are you saying you'd like to stop a goal from rolling over/i;
-const STOP_ROLLOVER_NAME_RE = /^great — which goal should i stop from rolling over\?$/i;
+// rolling over" / "turn off rollover for Cleaning Charges") is intentionally
+// NOT localized — same one-shot-English-shape reasoning as above.
+const STOP_ROLLOVER_TEXT = {
+  en: { confirm: 'Are you saying you\'d like to stop a goal from rolling over?', askName: 'Great — which goal should I stop from rolling over?', askNameEmpty: 'Which goal should I stop from rolling over?' },
+  de: { confirm: 'Möchten Sie verhindern, dass ein Ziel übertragen wird?', askName: 'Gut — bei welchem Ziel soll ich die Übertragung stoppen?', askNameEmpty: 'Bei welchem Ziel soll ich die Übertragung stoppen?' },
+  fr: { confirm: 'Voulez-vous dire que vous souhaitez empêcher un objectif de se reporter ?', askName: 'Très bien — pour quel objectif dois-je arrêter le report ?', askNameEmpty: 'Pour quel objectif dois-je arrêter le report ?' },
+  es: { confirm: '¿Quieres decir que te gustaría detener el traspaso de una meta?', askName: 'Genial — ¿para qué meta debo detener el traspaso?', askNameEmpty: '¿Para qué meta debo detener el traspaso?' },
+  ar: { confirm: 'هل تقصد أنك تريد إيقاف ترحيل هدف؟', askName: 'رائع — لأي هدف يجب أن أوقف الترحيل؟', askNameEmpty: 'لأي هدف يجب أن أوقف الترحيل؟' },
+  ru: { confirm: 'Вы хотите остановить перенос цели на следующий период?', askName: 'Отлично — для какой цели остановить перенос?', askNameEmpty: 'Для какой цели остановить перенос?' },
+  pt: { confirm: 'Você gostaria de impedir que uma meta seja transferida para o próximo período?', askName: 'Ótimo — para qual meta devo impedir a transferência?', askNameEmpty: 'Para qual meta devo impedir a transferência?' },
+  zh: { confirm: '您是想停止某个目标的结转吗？', askName: '好的 — 应该停止哪个目标的结转？', askNameEmpty: '应该停止哪个目标的结转？' }
+};
+const STOP_ROLLOVER_CONFIRM_RE = new RegExp(Object.values(STOP_ROLLOVER_TEXT).map(t => escapeRegExp(t.confirm)).join('|'), 'i');
+const STOP_ROLLOVER_NAME_RE = new RegExp(Object.values(STOP_ROLLOVER_TEXT).map(t => `^${escapeRegExp(t.askName)}$`).join('|'), 'i');
 PENDING_FLOW_MARKERS.push(STOP_ROLLOVER_CONFIRM_RE, STOP_ROLLOVER_NAME_RE);
 
 function parseStopRollover(msg, history) {
@@ -745,17 +798,19 @@ function parseStopRollover(msg, history) {
 
   if (lastAssistant && STOP_ROLLOVER_NAME_RE.test(lastAssistant.content)) {
     const goalName = msg.replace(/[.?!]+$/, '').trim();
-    if (!goalName) return { reply: 'Which goal should I stop from rolling over?', handled: true };
+    if (!goalName) return { reply: renderFlow(STOP_ROLLOVER_TEXT, 'askNameEmpty'), handled: true };
     return { reply: 'Here\'s what I understood:', action: { type: 'stop_rollover', params: { goalName } }, handled: true };
   }
 
   if (lastAssistant && STOP_ROLLOVER_CONFIRM_RE.test(lastAssistant.content)) {
     if (!AFFIRMATIVE_RE.test(msg)) return null;
-    return { reply: 'Great — which goal should I stop from rolling over?', handled: true };
+    return { reply: renderFlow(STOP_ROLLOVER_TEXT, 'askName'), handled: true };
   }
 
-  if (!HOW_TO_RE.test(msg) && (/\brollover\b|\brolling over\b/i.test(msg)) && /\b(stop|turn off|disable)\b/i.test(msg)) {
-    return { reply: 'Are you saying you\'d like to stop a goal from rolling over?', handled: true };
+  const rolloverWordRe = /\brollover\b|\brolling over\b|übertrag|\breport\b|reporter|traspaso|ترحيل|перенос|transferência|结转/i;
+  const stopWordRe = /\b(stop|turn off|disable)\b|stoppen|verhindern|arrêter|empêcher|\bdetener\b|\bimpedir\b|إيقاف|أوقف|остановить|停止/i;
+  if (!HOW_TO_RE.test(msg) && rolloverWordRe.test(msg) && stopWordRe.test(msg)) {
+    return { reply: renderFlow(STOP_ROLLOVER_TEXT, 'confirm'), handled: true };
   }
 
   return null;
@@ -763,11 +818,42 @@ function parseStopRollover(msg, history) {
 
 // Steps: confirm -> amount -> category (-> optional description folded into
 // the category answer if present). Fast path ("add an expense of 2000 for
-// flowers, category event expenses") still works in one shot.
-const ADD_EXPENSE_CONFIRM_RE = /are you saying you'd like to add an expense/i;
-const ADD_EXPENSE_AMOUNT_RE = /^great — how much was the expense\?$/i;
-const ADD_EXPENSE_CATEGORY_RE = /^what category is this (?:rs\.?|inr|₹|\$|£|€)?\s*[\d,.]+\s*expense — one of:/i;
+// flowers, category event expenses") is intentionally NOT localized — same
+// one-shot-English-shape reasoning as mark_goal_complete/stop_rollover.
+// The category question embeds the amount mid-sentence, so — like
+// CREATE_GOAL_TEXT.askType — it's built from a prefix/middle/suffix split
+// around the {amount} token rather than a single compileTemplate token,
+// since the category LIST after it is itself a dynamic, translated join.
+const ADD_EXPENSE_TEXT = {
+  en: { confirm: 'Are you saying you\'d like to add an expense?', askAmount: 'Great — how much was the expense?', askAmountEmpty: 'How much was the expense?', categoryQPrefix: 'What category is this ', categoryQMiddle: ' expense — one of: ', categoryQSuffix: '?' },
+  de: { confirm: 'Möchten Sie eine Ausgabe hinzufügen?', askAmount: 'Gut — wie hoch war die Ausgabe?', askAmountEmpty: 'Wie hoch war die Ausgabe?', categoryQPrefix: 'Welcher Kategorie gehört diese Ausgabe über ', categoryQMiddle: ' an — eine von: ', categoryQSuffix: '?' },
+  fr: { confirm: 'Voulez-vous dire que vous souhaitez ajouter une dépense ?', askAmount: 'Très bien — combien s\'élevait la dépense ?', askAmountEmpty: 'Combien s\'élevait la dépense ?', categoryQPrefix: 'À quelle catégorie appartient cette dépense de ', categoryQMiddle: ' — l\'une de : ', categoryQSuffix: ' ?' },
+  es: { confirm: '¿Quieres decir que te gustaría agregar un gasto?', askAmount: 'Genial — ¿cuánto fue el gasto?', askAmountEmpty: '¿Cuánto fue el gasto?', categoryQPrefix: '¿A qué categoría pertenece este gasto de ', categoryQMiddle: ' — una de: ', categoryQSuffix: '?' },
+  ar: { confirm: 'هل تقصد أنك تريد إضافة مصروف؟', askAmount: 'رائع — كم كان المصروف؟', askAmountEmpty: 'كم كان المصروف؟', categoryQPrefix: 'ما فئة هذا المصروف البالغ ', categoryQMiddle: ' — واحدة من: ', categoryQSuffix: '؟' },
+  ru: { confirm: 'Вы хотите добавить расход?', askAmount: 'Отлично — сколько составил расход?', askAmountEmpty: 'Сколько составил расход?', categoryQPrefix: 'К какой категории относится этот расход на сумму ', categoryQMiddle: ' — одна из: ', categoryQSuffix: '?' },
+  pt: { confirm: 'Você gostaria de adicionar uma despesa?', askAmount: 'Ótimo — qual foi o valor da despesa?', askAmountEmpty: 'Qual foi o valor da despesa?', categoryQPrefix: 'A qual categoria pertence esta despesa de ', categoryQMiddle: ' — uma de: ', categoryQSuffix: '?' },
+  zh: { confirm: '您是想添加一笔支出吗？', askAmount: '好的 — 这笔支出是多少？', askAmountEmpty: '这笔支出是多少？', categoryQPrefix: '这笔', categoryQMiddle: '的支出属于哪个类别 — 以下之一：', categoryQSuffix: '？' }
+};
+const ADD_EXPENSE_CONFIRM_RE = new RegExp(Object.values(ADD_EXPENSE_TEXT).map(t => escapeRegExp(t.confirm)).join('|'), 'i');
+const ADD_EXPENSE_AMOUNT_RE = new RegExp(Object.values(ADD_EXPENSE_TEXT).map(t => `^${escapeRegExp(t.askAmount)}$`).join('|'), 'i');
+const ADD_EXPENSE_CATEGORY_RE = new RegExp(Object.values(ADD_EXPENSE_TEXT).map(t => `^${escapeRegExp(t.categoryQPrefix)}`).join('|'), 'i');
 PENDING_FLOW_MARKERS.push(ADD_EXPENSE_CONFIRM_RE, ADD_EXPENSE_AMOUNT_RE, ADD_EXPENSE_CATEGORY_RE);
+
+function expenseCategoryQuestion(amount) {
+  const t = ADD_EXPENSE_TEXT[currentLang] || ADD_EXPENSE_TEXT.en;
+  return `${t.categoryQPrefix}${formatMoney(amount)}${t.categoryQMiddle}${expenseCategoryNames().join(', ')}${t.categoryQSuffix}`;
+}
+
+function extractExpenseCategoryQuestionAmount(text) {
+  for (const t of Object.values(ADD_EXPENSE_TEXT)) {
+    const m = text.match(new RegExp(`^${escapeRegExp(t.categoryQPrefix)}([\\d,.]+)`, 'i'));
+    if (m) return Number(m[1].replace(/,/g, '')) || 0;
+  }
+  return 0;
+}
+
+const ADD_EXPENSE_ACTION_WORDS_RE = /\b(add|log|record)\b|hinzufüg|\bajout|\benregistr|\bagregar\b|\bregistrar\b|إضافة|تسجيل|добав|регистр|添加|记录/i;
+const EXPENSE_WORD_RE = /\bexpense\b|ausgabe|dépense|gasto|مصروف|расход|despesa|支出/i;
 
 function parseAddExpense(msg, history) {
   const fastAmtMatch = msg.match(/(?:expense|spent|paid)\s+(?:of\s+)?(?:rs\.?|inr|₹|\$|£|€)?\s*(\d+(?:\.\d+)?)/i) || msg.match(/(?:₹|\$|£|€|rs\.?)\s*(\d+(?:\.\d+)?)/i);
@@ -780,17 +866,16 @@ function parseAddExpense(msg, history) {
     if (category) {
       return { reply: 'Here\'s what I understood:', action: { type: 'add_expense', params: { amount, description, category } }, handled: true };
     }
-    return { reply: `What category is this ${formatMoney(amount)} expense — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+    return { reply: expenseCategoryQuestion(amount), handled: true };
   }
 
   const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
 
   // Step 3: answering the category question
   if (lastAssistant && ADD_EXPENSE_CATEGORY_RE.test(lastAssistant.content)) {
-    const amountMatch = lastAssistant.content.match(/is this (?:rs\.?|inr|₹|\$|£|€)?\s*([\d,.]+)\s*expense/i);
-    const amount = amountMatch ? Number(amountMatch[1].replace(/,/g, '')) || 0 : 0;
+    const amount = extractExpenseCategoryQuestionAmount(lastAssistant.content);
     const category = matchExpenseCategory(msg);
-    if (!category) return { reply: `What category is this ${formatMoney(amount)} expense — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+    if (!category) return { reply: expenseCategoryQuestion(amount), handled: true };
     const forMatch = msg.match(/\bfor\s+([a-z0-9 .'-]+?)[.?!]*$/i);
     const description = forMatch ? forMatch[1].trim() : '';
     return { reply: 'Here\'s what I understood:', action: { type: 'add_expense', params: { amount, description, category } }, handled: true };
@@ -799,22 +884,22 @@ function parseAddExpense(msg, history) {
   // Step 2: answering "how much was the expense?"
   if (lastAssistant && ADD_EXPENSE_AMOUNT_RE.test(lastAssistant.content)) {
     const amount = extractBareOrAtAmount(msg);
-    if (!amount) return { reply: 'How much was the expense?', handled: true };
+    if (!amount) return { reply: renderFlow(ADD_EXPENSE_TEXT, 'askAmountEmpty'), handled: true };
     const category = matchExpenseCategory(msg);
     if (category) {
       return { reply: 'Here\'s what I understood:', action: { type: 'add_expense', params: { amount, description: '', category } }, handled: true };
     }
-    return { reply: `What category is this ${formatMoney(amount)} expense — one of: ${EXPENSE_CATEGORIES.join(', ')}?`, handled: true };
+    return { reply: expenseCategoryQuestion(amount), handled: true };
   }
 
   // Step 1 (confirm)
   if (lastAssistant && ADD_EXPENSE_CONFIRM_RE.test(lastAssistant.content)) {
     if (!AFFIRMATIVE_RE.test(msg)) return null;
-    return { reply: 'Great — how much was the expense?', handled: true };
+    return { reply: renderFlow(ADD_EXPENSE_TEXT, 'askAmount'), handled: true };
   }
 
-  if (!HOW_TO_RE.test(msg) && /\bexpense\b/i.test(msg) && /\b(add|log|record)\b/i.test(msg)) {
-    return { reply: 'Are you saying you\'d like to add an expense?', handled: true };
+  if (!HOW_TO_RE.test(msg) && EXPENSE_WORD_RE.test(msg) && ADD_EXPENSE_ACTION_WORDS_RE.test(msg)) {
+    return { reply: renderFlow(ADD_EXPENSE_TEXT, 'confirm'), handled: true };
   }
 
   return null;
@@ -941,11 +1026,38 @@ function parseRaiseTicket(msg, history) {
 
 // Steps: confirm -> which field (mobile or name) -> new value. Fast path
 // ("change Ramesh's mobile number to 9998887766" / "change Ramesh's name to
-// Suresh") still works in one shot.
-const EDIT_SUBSCRIBER_CONFIRM_RE = /are you saying you'd like to edit a subscriber's details/i;
-const EDIT_SUBSCRIBER_WHO_RE = /^great — which subscriber, and should i change their mobile number or their name\?$/i;
-const EDIT_SUBSCRIBER_VALUE_RE = /^what should (.+?)'s (mobile number|name) be changed to\?$/i;
+// Suresh") is intentionally NOT localized — same one-shot-English-shape
+// reasoning as mark_goal_complete/stop_rollover/add_expense above. The
+// value-question is split into two separate fixed templates (askValueMobile/
+// askValueName) rather than one with an embedded {field} token, so the
+// field type can be recovered from WHICH template matched instead of
+// string-comparing a translated word — mirrors CREATE_GOAL_TEXT.askType.
+const EDIT_SUBSCRIBER_TEXT = {
+  en: { confirm: 'Are you saying you\'d like to edit a subscriber\'s details?', askWho: 'Great — which subscriber, and should I change their mobile number or their name?', askWhoEmpty: 'Which subscriber, and should I change their mobile number or their name?', askFieldOnly: 'Should I change {name}\'s mobile number or their name?', askValueMobile: 'What should {name}\'s mobile number be changed to?', askValueName: 'What should {name}\'s name be changed to?' },
+  de: { confirm: 'Möchten Sie die Daten eines Abonnenten bearbeiten?', askWho: 'Gut — welcher Abonnent, und soll ich die Handynummer oder den Namen ändern?', askWhoEmpty: 'Welcher Abonnent, und soll ich die Handynummer oder den Namen ändern?', askFieldOnly: 'Soll ich die Handynummer oder den Namen von {name} ändern?', askValueMobile: 'Auf welche Handynummer soll die von {name} geändert werden?', askValueName: 'Wie soll der Name von {name} geändert werden?' },
+  fr: { confirm: 'Voulez-vous dire que vous souhaitez modifier les informations d\'un abonné ?', askWho: 'Très bien — quel abonné, et dois-je modifier son numéro de mobile ou son nom ?', askWhoEmpty: 'Quel abonné, et dois-je modifier son numéro de mobile ou son nom ?', askFieldOnly: 'Dois-je modifier le numéro de mobile ou le nom de {name} ?', askValueMobile: 'Quel doit être le nouveau numéro de mobile de {name} ?', askValueName: 'Quel doit être le nouveau nom de {name} ?' },
+  es: { confirm: '¿Quieres decir que te gustaría editar los datos de un suscriptor?', askWho: 'Genial — ¿qué suscriptor, y debo cambiar su número de móvil o su nombre?', askWhoEmpty: '¿Qué suscriptor, y debo cambiar su número de móvil o su nombre?', askFieldOnly: '¿Debo cambiar el número de móvil o el nombre de {name}?', askValueMobile: '¿A qué número de móvil se debe cambiar el de {name}?', askValueName: '¿A qué nombre se debe cambiar el de {name}?' },
+  ar: { confirm: 'هل تقصد أنك تريد تعديل بيانات مشترك؟', askWho: 'رائع — أي مشترك، وهل يجب أن أغيّر رقم جواله أم اسمه؟', askWhoEmpty: 'أي مشترك، وهل يجب أن أغيّر رقم جواله أم اسمه؟', askFieldOnly: 'هل يجب أن أغيّر رقم جوال {name} أم اسمه؟', askValueMobile: 'إلام يجب تغيير رقم جوال {name}؟', askValueName: 'إلام يجب تغيير اسم {name}؟' },
+  ru: { confirm: 'Вы хотите изменить данные подписчика?', askWho: 'Отлично — какой подписчик, и что изменить: номер мобильного или имя?', askWhoEmpty: 'Какой подписчик, и что изменить: номер мобильного или имя?', askFieldOnly: 'Изменить номер мобильного или имя {name}?', askValueMobile: 'На какой номер мобильного изменить номер {name}?', askValueName: 'На какое имя изменить имя {name}?' },
+  pt: { confirm: 'Você gostaria de editar os dados de um assinante?', askWho: 'Ótimo — qual assinante, e devo alterar o número de celular ou o nome?', askWhoEmpty: 'Qual assinante, e devo alterar o número de celular ou o nome?', askFieldOnly: 'Devo alterar o número de celular ou o nome de {name}?', askValueMobile: 'Para qual número de celular devo alterar o de {name}?', askValueName: 'Para qual nome devo alterar o de {name}?' },
+  zh: { confirm: '您是想编辑订阅者的信息吗？', askWho: '好的 — 是哪位订阅者，需要修改手机号还是姓名？', askWhoEmpty: '是哪位订阅者，需要修改手机号还是姓名？', askFieldOnly: '需要修改{name}的手机号还是姓名？', askValueMobile: '{name}的手机号应改为多少？', askValueName: '{name}的姓名应改为什么？' }
+};
+const EDIT_SUBSCRIBER_CONFIRM_RE = new RegExp(Object.values(EDIT_SUBSCRIBER_TEXT).map(t => escapeRegExp(t.confirm)).join('|'), 'i');
+const EDIT_SUBSCRIBER_WHO_RE = new RegExp(Object.values(EDIT_SUBSCRIBER_TEXT).map(t => `^${escapeRegExp(t.askWho)}$`).join('|'), 'i');
+const EDIT_SUBSCRIBER_VALUE_RE = { test: (text) => testFlowAnyLang(EDIT_SUBSCRIBER_TEXT, 'askValueMobile', text) || testFlowAnyLang(EDIT_SUBSCRIBER_TEXT, 'askValueName', text) };
 PENDING_FLOW_MARKERS.push(EDIT_SUBSCRIBER_CONFIRM_RE, EDIT_SUBSCRIBER_WHO_RE, EDIT_SUBSCRIBER_VALUE_RE);
+
+const EDIT_SUBSCRIBER_MOBILE_WORD_RE = /\bmobile\b|handynummer|\bnummer\b|numéro de mobile|numéro|número de móvil|número de celular|número|رقم الجوال|جوال|номер (?:мобильного|телефона)|номер|手机号|手机/i;
+const EDIT_SUBSCRIBER_NAME_WORD_RE = /\bname\b|\bnom\b|\bnombre\b|الاسم|اسم|имя|\bnome\b|姓名|名字/i;
+const EDIT_SUBSCRIBER_FIELD_STRIP_RE = new RegExp(`${EDIT_SUBSCRIBER_MOBILE_WORD_RE.source}|${EDIT_SUBSCRIBER_NAME_WORD_RE.source}`, 'gi');
+
+function editSubscriberValueMatch(text) {
+  const mobileMatch = execFlowAnyLang(EDIT_SUBSCRIBER_TEXT, 'askValueMobile', text);
+  if (mobileMatch) return { name: mobileMatch.name, field: 'mobile' };
+  const nameMatch = execFlowAnyLang(EDIT_SUBSCRIBER_TEXT, 'askValueName', text);
+  if (nameMatch) return { name: nameMatch.name, field: 'name' };
+  return null;
+}
 
 function parseEditSubscriber(msg, history) {
   let fastMatch = msg.match(/(?:change|update|edit)\s+([a-z][a-z0-9 .'-]*?)'s\s+mobile(?:\s+number)?\s+to\s+(\d{6,15})/i);
@@ -961,41 +1073,43 @@ function parseEditSubscriber(msg, history) {
 
   // Step 3: answering "what should X's mobile/name be changed to?"
   if (lastAssistant && EDIT_SUBSCRIBER_VALUE_RE.test(lastAssistant.content)) {
-    const [, subscriberName, field] = lastAssistant.content.match(EDIT_SUBSCRIBER_VALUE_RE);
+    const { name: subscriberName, field } = editSubscriberValueMatch(lastAssistant.content) || {};
     const value = msg.replace(/[.?!]+$/, '').trim();
-    if (!value) return { reply: `What should ${subscriberName}'s ${field} be changed to?`, handled: true };
-    if (field === 'mobile number') {
+    if (field === 'mobile') {
+      if (!value) return { reply: renderFlow(EDIT_SUBSCRIBER_TEXT, 'askValueMobile', { name: subscriberName }), handled: true };
       const mobileMatch = value.match(/\d{6,15}/);
-      if (!mobileMatch) return { reply: `What should ${subscriberName}'s mobile number be changed to?`, handled: true };
+      if (!mobileMatch) return { reply: renderFlow(EDIT_SUBSCRIBER_TEXT, 'askValueMobile', { name: subscriberName }), handled: true };
       return { reply: 'Here\'s what I understood:', action: { type: 'edit_subscriber', params: { subscriberName, mobile: mobileMatch[0] } }, handled: true };
     }
+    if (!value) return { reply: renderFlow(EDIT_SUBSCRIBER_TEXT, 'askValueName', { name: subscriberName }), handled: true };
     return { reply: 'Here\'s what I understood:', action: { type: 'edit_subscriber', params: { subscriberName, name: value } }, handled: true };
   }
 
   // Step 2: answering "which subscriber, and mobile or name?"
   if (lastAssistant && EDIT_SUBSCRIBER_WHO_RE.test(lastAssistant.content)) {
-    const isMobile = /\bmobile\b/i.test(msg);
-    const isName = /\bname\b/i.test(msg);
+    const isMobile = EDIT_SUBSCRIBER_MOBILE_WORD_RE.test(msg);
+    const isName = !isMobile && EDIT_SUBSCRIBER_NAME_WORD_RE.test(msg);
     const subscriberName = msg
-      .replace(/\b(mobile(?:\s+number)?|name)\b/gi, '')
+      .replace(EDIT_SUBSCRIBER_FIELD_STRIP_RE, '')
       .replace(/[,.]/g, '')
       .trim();
-    if (!subscriberName) return { reply: 'Which subscriber, and should I change their mobile number or their name?', handled: true };
+    if (!subscriberName) return { reply: renderFlow(EDIT_SUBSCRIBER_TEXT, 'askWhoEmpty'), handled: true };
     if (!isMobile && !isName) {
-      return { reply: `Should I change ${subscriberName}'s mobile number or their name?`, handled: true };
+      return { reply: renderFlow(EDIT_SUBSCRIBER_TEXT, 'askFieldOnly', { name: subscriberName }), handled: true };
     }
-    const field = isMobile ? 'mobile number' : 'name';
-    return { reply: `What should ${subscriberName}'s ${field} be changed to?`, handled: true };
+    return { reply: renderFlow(EDIT_SUBSCRIBER_TEXT, isMobile ? 'askValueMobile' : 'askValueName', { name: subscriberName }), handled: true };
   }
 
   // Step 1 (confirm)
   if (lastAssistant && EDIT_SUBSCRIBER_CONFIRM_RE.test(lastAssistant.content)) {
     if (!AFFIRMATIVE_RE.test(msg)) return null;
-    return { reply: 'Great — which subscriber, and should I change their mobile number or their name?', handled: true };
+    return { reply: renderFlow(EDIT_SUBSCRIBER_TEXT, 'askWho'), handled: true };
   }
 
-  if (!HOW_TO_RE.test(msg) && /\b(change|update|edit)\b/i.test(msg) && /\bsubscriber\b|\bcontributor\b/i.test(msg)) {
-    return { reply: 'Are you saying you\'d like to edit a subscriber\'s details?', handled: true };
+  const editActionWordRe = /\b(change|update|edit)\b|ändern|aktualisier|\bmodifier\b|\bchanger\b|\bcambiar\b|\bmodificar\b|\beditar\b|تغيير|تعديل|измен|обновл|alterar|修改|更新/i;
+  const subscriberWordRe = /\bsubscriber\b|\bcontributor\b|abonnent|\babonn[ée]|suscriptor|مشترك|подписчик|assinante|订阅者/i;
+  if (!HOW_TO_RE.test(msg) && editActionWordRe.test(msg) && subscriberWordRe.test(msg)) {
+    return { reply: renderFlow(EDIT_SUBSCRIBER_TEXT, 'confirm'), handled: true };
   }
 
   return null;
@@ -1336,18 +1450,33 @@ function parseSendWhatsappReminders(msg, history) {
 // collect fallback menu's option 2 below (no standalone keyword trigger of
 // its own) — "download the receipt" alone is too generic a phrase to guess
 // at reliably, whereas the menu already established the user meant this.
-const DOWNLOAD_RECEIPT_MOBILE_RE = /^great — what's the subscriber's mobile number so i can find their receipt\?$/i;
-const DOWNLOAD_RECEIPT_GOAL_RE = /^what's the goal name for (.+?)'s receipt\?$/i;
+const DOWNLOAD_RECEIPT_TEXT = {
+  en: { askMobile: 'Great — what\'s the subscriber\'s mobile number so I can find their receipt?', askMobileEmpty: 'What\'s the subscriber\'s mobile number?', askGoal: 'What\'s the goal name for {name}\'s receipt?' },
+  de: { askMobile: 'Gut — wie lautet die Handynummer des Abonnenten, damit ich seinen Beleg finden kann?', askMobileEmpty: 'Wie lautet die Handynummer des Abonnenten?', askGoal: 'Wie heißt das Ziel für den Beleg von {name}?' },
+  fr: { askMobile: 'Très bien — quel est le numéro de mobile de l\'abonné pour que je puisse trouver son reçu ?', askMobileEmpty: 'Quel est le numéro de mobile de l\'abonné ?', askGoal: 'Quel est le nom de l\'objectif pour le reçu de {name} ?' },
+  es: { askMobile: 'Genial — ¿cuál es el número de móvil del suscriptor para poder encontrar su recibo?', askMobileEmpty: '¿Cuál es el número de móvil del suscriptor?', askGoal: '¿Cuál es el nombre de la meta para el recibo de {name}?' },
+  ar: { askMobile: 'رائع — ما رقم جوال المشترك حتى أتمكن من العثور على إيصاله؟', askMobileEmpty: 'ما رقم جوال المشترك؟', askGoal: 'ما اسم الهدف الخاص بإيصال {name}؟' },
+  ru: { askMobile: 'Отлично — какой номер мобильного у подписчика, чтобы я мог найти его квитанцию?', askMobileEmpty: 'Какой номер мобильного у подписчика?', askGoal: 'Как называется цель для квитанции {name}?' },
+  pt: { askMobile: 'Ótimo — qual é o número de celular do assinante para eu encontrar o recibo dele?', askMobileEmpty: 'Qual é o número de celular do assinante?', askGoal: 'Qual é o nome da meta para o recibo de {name}?' },
+  zh: { askMobile: '好的 — 订阅者的手机号是多少，这样我才能找到他们的收据？', askMobileEmpty: '订阅者的手机号是多少？', askGoal: '{name}的收据对应哪个目标？' }
+};
+const DOWNLOAD_RECEIPT_MOBILE_RE = new RegExp(Object.values(DOWNLOAD_RECEIPT_TEXT).map(t => `^${escapeRegExp(t.askMobile)}$`).join('|'), 'i');
+const DOWNLOAD_RECEIPT_GOAL_RE = { test: (text) => testFlowAnyLang(DOWNLOAD_RECEIPT_TEXT, 'askGoal', text) };
 PENDING_FLOW_MARKERS.push(DOWNLOAD_RECEIPT_MOBILE_RE, DOWNLOAD_RECEIPT_GOAL_RE);
+
+function downloadReceiptMobileQuestion() {
+  return renderFlow(DOWNLOAD_RECEIPT_TEXT, 'askMobile');
+}
 
 function parseDownloadReceipt(msg, history) {
   const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
 
   // Step 2: answering "what's the goal name for <mobile>'s receipt?"
   if (lastAssistant && DOWNLOAD_RECEIPT_GOAL_RE.test(lastAssistant.content)) {
-    const [, subscriberName] = lastAssistant.content.match(DOWNLOAD_RECEIPT_GOAL_RE);
+    const extracted = execFlowAnyLang(DOWNLOAD_RECEIPT_TEXT, 'askGoal', lastAssistant.content);
+    const subscriberName = extracted ? extracted.name : '';
     const goalName = msg.replace(/[.?!]+$/, '').trim();
-    if (!goalName) return { reply: `What's the goal name for ${subscriberName}'s receipt?`, handled: true };
+    if (!goalName) return { reply: renderFlow(DOWNLOAD_RECEIPT_TEXT, 'askGoal', { name: subscriberName }), handled: true };
     return { reply: 'Here\'s what I understood:', action: { type: 'download_receipt', params: { subscriberName, goalName } }, handled: true };
   }
 
@@ -1355,8 +1484,8 @@ function parseDownloadReceipt(msg, history) {
   if (lastAssistant && DOWNLOAD_RECEIPT_MOBILE_RE.test(lastAssistant.content)) {
     const mobileMatch = msg.match(/\b(\d{6,15})\b/);
     const subscriberName = mobileMatch ? mobileMatch[1] : msg.replace(/[.?!]+$/, '').trim();
-    if (!subscriberName) return { reply: 'What\'s the subscriber\'s mobile number?', handled: true };
-    return { reply: `What's the goal name for ${subscriberName}'s receipt?`, handled: true };
+    if (!subscriberName) return { reply: renderFlow(DOWNLOAD_RECEIPT_TEXT, 'askMobileEmpty'), handled: true };
+    return { reply: renderFlow(DOWNLOAD_RECEIPT_TEXT, 'askGoal', { name: subscriberName }), handled: true };
   }
 
   return null;
@@ -1652,13 +1781,14 @@ function parseGoalFallbackMenu(msg, history) {
   if (lastAssistant && GOAL_MENU_RE.test(lastAssistant.content)) {
     const choice = msg.trim().toLowerCase();
 
-    // Options 1/5/6/7's reply text below stays English literal on purpose
-    // — CREATE_GOAL_NAME_RE/MARK_COMPLETE_NAME_RE/STOP_ROLLOVER_NAME_RE/
-    // GOALS_LIST_RECEIPTS_WHO_RE match that exact text elsewhere and hand
-    // off into their own (not-yet-localized) flows. Only the menu itself
-    // and picking an option are localized.
+    // Option 7's reply text below stays English literal on purpose —
+    // GOALS_LIST_RECEIPTS_WHO_RE matches that exact text elsewhere and
+    // hands off into its own (not-yet-localized) flow. Options 1/5/6 hand
+    // off into create_goal/mark_goal_complete/stop_rollover, which are now
+    // fully localized, so their handoff text uses each flow's own TEXT
+    // table instead of a hardcoded English literal.
     if (/^1\b/.test(choice) || (kw[1].test(choice) && !kw[4].test(choice))) {
-      return { reply: 'Great — what should the goal be named?', handled: true };
+      return { reply: renderFlow(CREATE_GOAL_TEXT, 'askName'), handled: true };
     }
     // Options 2-4 and 7 are terminal or hand off elsewhere without looping
     // back automatically on their own — the menu is re-appended after each
@@ -1677,10 +1807,10 @@ function parseGoalFallbackMenu(msg, history) {
       return { reply: `${deleteResult.reply}\n\n${goalMenuQuestion()}`, handled: true };
     }
     if (/^5\b/.test(choice) || kw[5].test(choice)) {
-      return { reply: 'Great — which goal should I mark complete?', handled: true };
+      return { reply: renderFlow(MARK_COMPLETE_TEXT, 'askName'), handled: true };
     }
     if (/^6\b/.test(choice) || kw[6].test(choice)) {
-      return { reply: 'Great — which goal should I stop from rolling over?', handled: true };
+      return { reply: renderFlow(STOP_ROLLOVER_TEXT, 'askName'), handled: true };
     }
     if (/^7\b/.test(choice) || kw[7].test(choice)) {
       return { reply: 'Great — what\'s the subscriber\'s name or mobile number, so I can list their receipts?', handled: true };
@@ -1964,7 +2094,7 @@ function parseCollectFallbackMenu(msg, history) {
       return { reply: 'Great — what\'s the subscriber\'s mobile number so I can look up their due and generate the link?', handled: true };
     }
     if (/^2\b/.test(choice) || kw[2].test(choice)) {
-      return { reply: 'Great — what\'s the subscriber\'s mobile number so I can find their receipt?', handled: true };
+      return { reply: downloadReceiptMobileQuestion(), handled: true };
     }
     if (/^4\b/.test(choice) || kw[4].test(choice)) {
       return { reply: `${t.howto}\n\n${collectMenuQuestion()}`, handled: true };
@@ -2109,7 +2239,7 @@ function parseSubscriberFallbackMenu(msg, history) {
       return { reply: 'Great — what\'s the subscriber\'s name and mobile number, so I can look up their details?', handled: true };
     }
     if (/^1\b/.test(choice) || kw[1].test(choice)) {
-      return { reply: 'Great — what\'s the subscriber\'s name?', handled: true };
+      return { reply: renderFlow(ADD_SUBSCRIBER_TEXT, 'askName'), handled: true };
     }
     if (/^2\b/.test(choice) || kw[2].test(choice)) {
       return { reply: `${t.openingDetails}\n\n${subscriberMenuQuestion()}`, action: { type: 'view_subscriber_details', params: {} }, handled: true };
