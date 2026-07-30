@@ -70,7 +70,7 @@ You can perform these actions directly using tools, instead of just explaining t
 - report_query: answers a read-only question from data already loaded (totals, dues, counts, plan info) — never a write.
 
 Rules for each tool:
-- create_goal: you must know whether it's monthly, quarterly, yearly, installment, or a one-off/event pledge. If the user didn't say, ASK them first in plain text — never assume "event" or any other default. For "installment", you also need the number of installments (a whole number, 2 or more) — ask if not given.
+- create_goal: you must know whether it's monthly, quarterly, yearly, installment, or a one-off/event pledge. If the user didn't say, ASK them first in plain text — never assume "event" or any other default. For "installment", you also need the number of installments (a whole number, 2 or more) and whether the amount is fixed or variable each period — ask for whichever is missing.
 - collect_payment: you need a subscriber name (or mobile number) and an amount. If the user also names a specific goal, include goalName; if they don't mention one, simply omit goalName from the tool call — the app will show them their list of dues to pick from, so you must NOT ask which goal yourself or guess one.
 - add_subscriber: you need a name and mobile number. If the user doesn't also mention a goal, ask them once in plain text whether to just add the subscriber, or also subscribe them to a specific goal right away, and wait for their answer before calling the tool. If they do want them subscribed to a goal, you also need the amount that subscriber specifically owes per period for that goal — ask for it if not given, and never guess it or default to the goal's own target amount (a subscriber's due is per-person and usually different from the goal's overall target, which is also frequently unset).
 - subscribe_to_goal: needs a subscriber name, a goal name, AND the amount that subscriber specifically owes per period for that goal. This amount is never optional and must never default to the goal's own target amount — always ask if the user didn't state it.
@@ -134,7 +134,12 @@ const TOOLS = [
           description: '"monthly"/"quarterly"/"yearly" for a goal that repeats every period indefinitely, "installment" for a goal split into a fixed number of periods (see totalInstallments) that auto-stops repeating once they\'re all created, "event" for a one-off pledge collection with no repeat. Must be explicitly known from what the user said — ask first if unclear, never default.'
         },
         targetAmount: { type: 'number', description: 'Optional target amount in the account currency. Omit if not mentioned.' },
-        totalInstallments: { type: 'integer', description: 'Required when category is "installment": the total number of installments (periods) to split the goal into, a whole number of 2 or more. Ask the user if not given. Omit for every other category.' }
+        totalInstallments: { type: 'integer', description: 'Required when category is "installment": the total number of installments (periods) to split the goal into, a whole number of 2 or more. Ask the user if not given. Omit for every other category.' },
+        installmentType: {
+          type: 'string',
+          enum: ['fixed', 'variable'],
+          description: 'Required when category is "installment": "fixed" if the same amount applies every period, "variable" if the treasurer will re-enter a (possibly different) amount for the whole goal each period instead. Ask the user if not given. Omit for every other category.'
+        }
       },
       required: ['name', 'category']
     }

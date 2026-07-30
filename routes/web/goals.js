@@ -6,7 +6,7 @@ const { requireProToken, requireProOrStaffToken } = require('../../middleware/au
 const {
   mirrorTarget, mirrorArchiveTarget, mirrorSubscription, mirrorDeleteSubscription
 } = require('../../utils/mirrorWrite');
-const { periodKeyForDate, periodLabel } = require('../../utils/rolloverEngine');
+const { periodKeyForDate, periodLabel, breakupTotal } = require('../../utils/rolloverEngine');
 const { nextId } = require('../../utils/idGen');
 
 const router = express.Router();
@@ -25,20 +25,25 @@ const router = express.Router();
 // moments earlier can't be silently lost.
 // ---------------------------------------------------------------
 router.post('/web-create-target', requireProToken, async (req, res) => {
-  const { name, category, targetAmount, totalInstallments } = req.body;
+  const { name, category, targetAmount, totalInstallments, installmentType } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
   if (!['monthly', 'quarterly', 'yearly', 'event', 'installment'].includes(category)) {
     return res.status(400).json({ error: "category must be 'monthly', 'quarterly', 'yearly', 'event', or 'installment'" });
   }
   // Installment goals need a fixed number of periods to auto-stop after
   // (see utils/rolloverEngine.js) — every other category either rolls over
-  // indefinitely (monthly/quarterly/yearly) or not at all (event).
+  // indefinitely (monthly/quarterly/yearly) or not at all (event). They also
+  // need to know upfront whether the per-period amount is 'fixed' (same
+  // every period, the default/back-compat value) or 'variable' (treasurer
+  // re-enters it each period — see /web-set-installment-amount below).
   let installmentCount;
+  let resolvedInstallmentType;
   if (category === 'installment') {
     installmentCount = Number(totalInstallments);
     if (!Number.isInteger(installmentCount) || installmentCount < 2) {
       return res.status(400).json({ error: 'totalInstallments must be a whole number of 2 or more.' });
     }
+    resolvedInstallmentType = installmentType === 'variable' ? 'variable' : 'fixed';
   }
 
   try {
@@ -71,6 +76,11 @@ router.post('/web-create-target', requireProToken, async (req, res) => {
       if (category === 'installment') {
         rolloverFields.totalInstallments = installmentCount;
         rolloverFields.installmentsPaid = 1;
+        rolloverFields.installmentType = resolvedInstallmentType;
+        // The creator always supplies period 1's amount via targetAmount
+        // (below) whether fixed or variable, so there's nothing to await
+        // yet — awaitingAmount only appears starting from the 2nd period
+        // onward (see utils/rolloverEngine.js).
       }
     }
 
@@ -383,6 +393,100 @@ router.post('/web-stop-rollover', requireProToken, async (req, res) => {
   } catch (err) {
     console.error('Web stop rollover error:', err?.message || err);
     res.status(500).json({ error: 'Failed to stop rollover for this goal.' });
+  }
+});
+
+// ---------------------------------------------------------------
+// WEB SET INSTALLMENT AMOUNT — only for 'installment' goals created with
+// installmentType 'variable'. The treasurer re-enters the due amount for
+// the *current* period (one figure, applied uniformly to every subscriber
+// of this goal) — unlike fixed installments, a variable one doesn't reuse
+// last period's amount automatically; the rollover engine just carries it
+// forward as a placeholder and flags awaitingAmount: true until this is
+// called (see utils/rolloverEngine.js), which is what the dashboard's
+// reminder banner watches for.
+// ---------------------------------------------------------------
+router.post('/web-set-installment-amount', requireProToken, async (req, res) => {
+  const { targetId, amount } = req.body;
+  if (!targetId) return res.status(400).json({ error: 'targetId is required' });
+  const numAmount = Number(amount);
+  if (!Number.isFinite(numAmount) || numAmount <= 0) {
+    return res.status(400).json({ error: 'Enter a valid amount greater than 0.' });
+  }
+
+  try {
+    const { data: userData, error } = await supabase
+      .from('pro_user_data')
+      .select('contributors, targets')
+      .eq('user_id', req.proUserId)
+      .single();
+
+    if (error || !userData) return res.status(404).json({ error: 'Could not find your data.' });
+
+    const targets = userData.targets || [];
+    const idx = targets.findIndex(t => t.id === targetId);
+    if (idx === -1) return res.status(404).json({ error: 'Goal not found.' });
+    const target = targets[idx];
+
+    if (target.category !== 'installment' || target.installmentType !== 'variable') {
+      return res.status(400).json({ error: 'This action only applies to variable installment goals.' });
+    }
+    if (target.status !== 'active') {
+      return res.status(400).json({ error: 'This goal is not active.' });
+    }
+
+    targets[idx] = { ...target, targetAmount: numAmount, awaitingAmount: false };
+
+    // Swaps in the new amount as this period's "due" line for every
+    // subscriber, preserving any other breakup lines (e.g. carried-forward
+    // arrears or an advance-credit line) untouched, same reasoning as the
+    // rollover engine's own per-subscriber breakup handling.
+    const baseName = target.rolloverBaseName || target.name;
+    const dueLabel = `${periodLabel(target.rolloverPeriodKey, 'installment')} due`;
+    const contributors = userData.contributors || [];
+    const updatedSubs = [];
+
+    const updatedContributors = contributors.map(c => {
+      if (!(c.targetIds || []).includes(targetId)) return c;
+
+      const existingBreakup = c.targetBreakups?.[targetId];
+      let newAmount, newBreakup;
+      if (existingBreakup) {
+        newBreakup = [...existingBreakup.filter(item => item.label !== dueLabel), { label: dueLabel, amount: numAmount }];
+        newAmount = breakupTotal(newBreakup);
+      } else {
+        newBreakup = null;
+        newAmount = numAmount;
+      }
+
+      updatedSubs.push({ contributorId: c.id, amount: newAmount, breakup: newBreakup });
+
+      return {
+        ...c,
+        targetAmounts: { ...(c.targetAmounts || {}), [targetId]: newAmount },
+        ...(newBreakup ? { targetBreakups: { ...(c.targetBreakups || {}), [targetId]: newBreakup } } : {}),
+        recurringAmounts: { ...(c.recurringAmounts || {}), [baseName]: numAmount }
+      };
+    });
+
+    const { error: updateError } = await supabase
+      .from('pro_user_data')
+      .update({ targets, contributors: updatedContributors, updated_at: new Date().toISOString() })
+      .eq('user_id', req.proUserId);
+
+    if (updateError) return res.status(500).json({ error: updateError.message });
+
+    // Dual-write: mirror the goal's new amount/flag and every affected
+    // subscription into the new tables too.
+    await mirrorTarget(supabase, req.proUserId, targets[idx]);
+    for (const s of updatedSubs) {
+      await mirrorSubscription(supabase, s.contributorId, targetId, s.amount, s.breakup, req.proUserId);
+    }
+
+    res.json({ success: true, target: targets[idx] });
+  } catch (err) {
+    console.error('Web set installment amount error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to set this installment amount.' });
   }
 });
 

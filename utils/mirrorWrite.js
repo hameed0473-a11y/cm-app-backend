@@ -94,9 +94,11 @@ async function mirrorTarget(supabase, userId, target) {
       rollover: !!target.rollover,
       // Installment goals only — null for every other category, matching
       // the nullable columns (see the targets_category_check migration
-      // that added quarterly/installment alongside these two columns).
+      // that added quarterly/installment alongside these columns).
       total_installments: target.totalInstallments ?? null,
-      installments_paid: target.installmentsPaid ?? null
+      installments_paid: target.installmentsPaid ?? null,
+      installment_type: target.installmentType ?? null,
+      awaiting_amount: target.awaitingAmount ?? null
     }], { onConflict: 'id' });
     if (error) console.warn('[mirror] target upsert skipped:', target.id, '-', error.message);
   } catch (err) {
@@ -204,7 +206,8 @@ async function mirrorFullSyncBatch(supabase, userId, { contributors = [], target
       const rows = targets.map(t => ({
         id: t.id, user_id: userId, name: t.name, category: t.category,
         status: t.status || 'active', target_amount: t.targetAmount ?? 0, rollover: !!t.rollover,
-        total_installments: t.totalInstallments ?? null, installments_paid: t.installmentsPaid ?? null
+        total_installments: t.totalInstallments ?? null, installments_paid: t.installmentsPaid ?? null,
+        installment_type: t.installmentType ?? null, awaiting_amount: t.awaitingAmount ?? null
       }));
       const { error } = await supabase.from('targets').upsert(rows, { onConflict: 'id' });
       if (error) console.warn('[mirror] sync targets batch skipped:', error.message);

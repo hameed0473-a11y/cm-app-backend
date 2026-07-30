@@ -176,8 +176,19 @@ async function processUserRow(row, today) {
       const isInstallment = category === 'installment';
       const installmentsPaid = isInstallment ? (working.installmentsPaid || 0) + 1 : undefined;
       const totalInstallments = isInstallment ? working.totalInstallments : undefined;
+      const isVariable = isInstallment && working.installmentType === 'variable';
       const installmentFields = isInstallment
-        ? { installmentsPaid, totalInstallments, rollover: totalInstallments ? installmentsPaid < totalInstallments : true }
+        ? {
+            installmentsPaid, totalInstallments, installmentType: working.installmentType || 'fixed',
+            rollover: totalInstallments ? installmentsPaid < totalInstallments : true,
+            // Variable installments keep last period's amount as a safe
+            // default (so collection isn't blocked if the treasurer hasn't
+            // updated it yet) but flag the new period as awaiting a fresh
+            // figure — surfaced as a dashboard reminder (see
+            // routes/web/goals.js's /web-set-installment-amount) until the
+            // treasurer confirms/changes it for this period.
+            ...(isVariable ? { awaitingAmount: true } : {})
+          }
         : { rollover: true };
       const newTarget = {
         id: newTargetId,
@@ -314,5 +325,9 @@ module.exports = {
   nextPeriodKey,
   periodLabel,
   isPeriodBefore,
-  processUserRow
+  processUserRow,
+  // exported for routes/web/goals.js's /web-set-installment-amount, which
+  // needs the same breakup-total math to recompute a contributor's due
+  // after swapping in a variable installment's freshly-entered amount.
+  breakupTotal
 };

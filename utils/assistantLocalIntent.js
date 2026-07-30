@@ -294,19 +294,22 @@ const GREETING_RE = /^\s*(hi+|hello+|hey+|hola|good\s?morning|good\s?afternoon|g
 // its question embeds the goal name — extraction happens via
 // execFlowAnyLang inside parseCreateGoal itself, this only needs .test().
 const CREATE_GOAL_TEXT = {
-  en: { confirm: 'Are you saying you\'d like to create a new goal?', askName: 'Great — what should the goal be named?', askNameEmpty: 'What should the goal be named?', askType: 'What type of goal is "{name}" — monthly, quarterly, yearly, installment, or a one-off/event pledge?', typeRetry: 'Sorry, I didn\'t catch the type — is "{name}" a monthly, quarterly, yearly, installment, or a one-off/event pledge goal?', askInstallmentCount: 'Great — how many installments should "{name}" be split into?', installmentCountRetry: 'Sorry, I need a whole number of 2 or more — how many installments should "{name}" be split into?' },
-  de: { confirm: 'Möchten Sie ein neues Ziel erstellen?', askName: 'Gut — wie soll das Ziel heißen?', askNameEmpty: 'Wie soll das Ziel heißen?', askType: 'Welcher Zieltyp ist "{name}" — monatlich, vierteljährlich, jährlich, in Raten, oder eine einmalige Zusage?', typeRetry: 'Entschuldigung, ich habe den Typ nicht verstanden — ist "{name}" monatlich, vierteljährlich, jährlich, in Raten, oder eine einmalige Zusage?', askInstallmentCount: 'Gut — in wie viele Raten soll "{name}" aufgeteilt werden?', installmentCountRetry: 'Entschuldigung, ich brauche eine ganze Zahl ab 2 — in wie viele Raten soll "{name}" aufgeteilt werden?' },
-  fr: { confirm: 'Voulez-vous dire que vous souhaitez créer un nouvel objectif ?', askName: 'Très bien — comment doit s\'appeler l\'objectif ?', askNameEmpty: 'Comment doit s\'appeler l\'objectif ?', askType: 'Quel type d\'objectif est "{name}" — mensuel, trimestriel, annuel, en versements échelonnés, ou une promesse ponctuelle ?', typeRetry: 'Désolé, je n\'ai pas compris le type — "{name}" est-il mensuel, trimestriel, annuel, en versements échelonnés, ou une promesse ponctuelle ?', askInstallmentCount: 'Très bien — en combien de versements "{name}" doit-il être réparti ?', installmentCountRetry: 'Désolé, j\'ai besoin d\'un nombre entier d\'au moins 2 — en combien de versements "{name}" doit-il être réparti ?' },
-  es: { confirm: '¿Quieres decir que te gustaría crear una nueva meta?', askName: 'Genial — ¿cómo debería llamarse la meta?', askNameEmpty: '¿Cómo debería llamarse la meta?', askType: '¿Qué tipo de meta es "{name}" — mensual, trimestral, anual, en cuotas, o una promesa única?', typeRetry: 'Lo siento, no entendí el tipo — ¿es "{name}" mensual, trimestral, anual, en cuotas, o una promesa única?', askInstallmentCount: 'Genial — ¿en cuántas cuotas debería dividirse "{name}"?', installmentCountRetry: 'Lo siento, necesito un número entero de 2 o más — ¿en cuántas cuotas debería dividirse "{name}"?' },
-  ar: { confirm: 'هل تقصد أنك تريد إنشاء هدف جديد؟', askName: 'رائع — ما الاسم الذي تريده للهدف؟', askNameEmpty: 'ما الاسم الذي تريده للهدف؟', askType: 'ما نوع الهدف "{name}" — شهري، ربع سنوي، سنوي، بالتقسيط، أم تعهد لمرة واحدة؟', typeRetry: 'عذرًا، لم أفهم النوع — هل "{name}" شهري، ربع سنوي، سنوي، بالتقسيط، أم تعهد لمرة واحدة؟', askInstallmentCount: 'رائع — إلى كم قسطًا يجب تقسيم "{name}"؟', installmentCountRetry: 'عذرًا، أحتاج رقمًا صحيحًا لا يقل عن 2 — إلى كم قسطًا يجب تقسيم "{name}"؟' },
-  ru: { confirm: 'Вы хотите создать новую цель?', askName: 'Отлично — как назвать цель?', askNameEmpty: 'Как назвать цель?', askType: 'Какой тип у цели «{name}» — ежемесячная, ежеквартальная, ежегодная, с рассрочкой, или разовое обещание?', typeRetry: 'Извините, я не понял тип — «{name}» это ежемесячная, ежеквартальная, ежегодная, с рассрочкой, или разовое обещание?', askInstallmentCount: 'Отлично — на сколько взносов разделить «{name}»?', installmentCountRetry: 'Извините, нужно целое число не меньше 2 — на сколько взносов разделить «{name}»?' },
-  pt: { confirm: 'Você gostaria de criar uma nova meta?', askName: 'Ótimo — como a meta deve se chamar?', askNameEmpty: 'Como a meta deve se chamar?', askType: 'Que tipo de meta é "{name}" — mensal, trimestral, anual, parcelada, ou uma promessa única?', typeRetry: 'Desculpe, não entendi o tipo — "{name}" é mensal, trimestral, anual, parcelada, ou uma promessa única?', askInstallmentCount: 'Ótimo — em quantas parcelas "{name}" deve ser dividida?', installmentCountRetry: 'Desculpe, preciso de um número inteiro de 2 ou mais — em quantas parcelas "{name}" deve ser dividida?' },
-  zh: { confirm: '您是想创建一个新目标吗？', askName: '好的 — 这个目标叫什么名字？', askNameEmpty: '这个目标叫什么名字？', askType: '"{name}"是什么类型的目标 — 月度、季度、年度、分期，还是一次性认捐？', typeRetry: '抱歉，我没听清类型 — "{name}"是月度、季度、年度、分期，还是一次性认捐？', askInstallmentCount: '好的 — "{name}"应分成多少期？', installmentCountRetry: '抱歉，需要一个至少为2的整数 — "{name}"应分成多少期？' }
+  en: { confirm: 'Are you saying you\'d like to create a new goal?', askName: 'Great — what should the goal be named?', askNameEmpty: 'What should the goal be named?', askType: 'What type of goal is "{name}" — monthly, quarterly, yearly, installment, or a one-off/event pledge?', typeRetry: 'Sorry, I didn\'t catch the type — is "{name}" a monthly, quarterly, yearly, installment, or a one-off/event pledge goal?', askInstallmentCount: 'Great — how many installments should "{name}" be split into?', installmentCountRetry: 'Sorry, I need a whole number of 2 or more — how many installments should "{name}" be split into?', askInstallmentType: 'Great — will "{name}" ({count} installments) be a fixed amount every period, or a variable amount you\'ll set each time?', installmentTypeRetry: 'Sorry, please say "fixed" or "variable" — will "{name}" ({count} installments) be a fixed amount every period, or variable?' },
+  de: { confirm: 'Möchten Sie ein neues Ziel erstellen?', askName: 'Gut — wie soll das Ziel heißen?', askNameEmpty: 'Wie soll das Ziel heißen?', askType: 'Welcher Zieltyp ist "{name}" — monatlich, vierteljährlich, jährlich, in Raten, oder eine einmalige Zusage?', typeRetry: 'Entschuldigung, ich habe den Typ nicht verstanden — ist "{name}" monatlich, vierteljährlich, jährlich, in Raten, oder eine einmalige Zusage?', askInstallmentCount: 'Gut — in wie viele Raten soll "{name}" aufgeteilt werden?', installmentCountRetry: 'Entschuldigung, ich brauche eine ganze Zahl ab 2 — in wie viele Raten soll "{name}" aufgeteilt werden?', askInstallmentType: 'Gut — soll "{name}" ({count} Raten) ein fester Betrag pro Rate sein, oder ein variabler Betrag, den Sie jedes Mal festlegen?', installmentTypeRetry: 'Entschuldigung, bitte sagen Sie "fest" oder "variabel" — soll "{name}" ({count} Raten) fest oder variabel sein?' },
+  fr: { confirm: 'Voulez-vous dire que vous souhaitez créer un nouvel objectif ?', askName: 'Très bien — comment doit s\'appeler l\'objectif ?', askNameEmpty: 'Comment doit s\'appeler l\'objectif ?', askType: 'Quel type d\'objectif est "{name}" — mensuel, trimestriel, annuel, en versements échelonnés, ou une promesse ponctuelle ?', typeRetry: 'Désolé, je n\'ai pas compris le type — "{name}" est-il mensuel, trimestriel, annuel, en versements échelonnés, ou une promesse ponctuelle ?', askInstallmentCount: 'Très bien — en combien de versements "{name}" doit-il être réparti ?', installmentCountRetry: 'Désolé, j\'ai besoin d\'un nombre entier d\'au moins 2 — en combien de versements "{name}" doit-il être réparti ?', askInstallmentType: 'Très bien — "{name}" ({count} versements) sera-t-il un montant fixe à chaque fois, ou un montant variable que vous définirez à chaque fois ?', installmentTypeRetry: 'Désolé, répondez "fixe" ou "variable" — "{name}" ({count} versements) sera-t-il fixe ou variable ?' },
+  es: { confirm: '¿Quieres decir que te gustaría crear una nueva meta?', askName: 'Genial — ¿cómo debería llamarse la meta?', askNameEmpty: '¿Cómo debería llamarse la meta?', askType: '¿Qué tipo de meta es "{name}" — mensual, trimestral, anual, en cuotas, o una promesa única?', typeRetry: 'Lo siento, no entendí el tipo — ¿es "{name}" mensual, trimestral, anual, en cuotas, o una promesa única?', askInstallmentCount: 'Genial — ¿en cuántas cuotas debería dividirse "{name}"?', installmentCountRetry: 'Lo siento, necesito un número entero de 2 o más — ¿en cuántas cuotas debería dividirse "{name}"?', askInstallmentType: 'Genial — ¿"{name}" ({count} cuotas) será un monto fijo cada vez, o un monto variable que definirás cada vez?', installmentTypeRetry: 'Lo siento, di "fijo" o "variable" — ¿"{name}" ({count} cuotas) será fijo o variable?' },
+  ar: { confirm: 'هل تقصد أنك تريد إنشاء هدف جديد؟', askName: 'رائع — ما الاسم الذي تريده للهدف؟', askNameEmpty: 'ما الاسم الذي تريده للهدف؟', askType: 'ما نوع الهدف "{name}" — شهري، ربع سنوي، سنوي، بالتقسيط، أم تعهد لمرة واحدة؟', typeRetry: 'عذرًا، لم أفهم النوع — هل "{name}" شهري، ربع سنوي، سنوي، بالتقسيط، أم تعهد لمرة واحدة؟', askInstallmentCount: 'رائع — إلى كم قسطًا يجب تقسيم "{name}"؟', installmentCountRetry: 'عذرًا، أحتاج رقمًا صحيحًا لا يقل عن 2 — إلى كم قسطًا يجب تقسيم "{name}"؟', askInstallmentType: 'رائع — هل سيكون "{name}" ({count} أقساط) بمبلغ ثابت كل مرة، أم مبلغ متغير تحدده أنت في كل مرة؟', installmentTypeRetry: 'عذرًا، رجاءً قل "ثابت" أو "متغير" — هل سيكون "{name}" ({count} أقساط) ثابتًا أم متغيرًا؟' },
+  ru: { confirm: 'Вы хотите создать новую цель?', askName: 'Отлично — как назвать цель?', askNameEmpty: 'Как назвать цель?', askType: 'Какой тип у цели «{name}» — ежемесячная, ежеквартальная, ежегодная, с рассрочкой, или разовое обещание?', typeRetry: 'Извините, я не понял тип — «{name}» это ежемесячная, ежеквартальная, ежегодная, с рассрочкой, или разовое обещание?', askInstallmentCount: 'Отлично — на сколько взносов разделить «{name}»?', installmentCountRetry: 'Извините, нужно целое число не меньше 2 — на сколько взносов разделить «{name}»?', askInstallmentType: 'Отлично — «{name}» ({count} взносов) будет с фиксированной суммой каждый раз, или с переменной суммой, которую вы будете указывать каждый раз?', installmentTypeRetry: 'Извините, скажите «фиксированная» или «переменная» — «{name}» ({count} взносов) будет фиксированной или переменной?' },
+  pt: { confirm: 'Você gostaria de criar uma nova meta?', askName: 'Ótimo — como a meta deve se chamar?', askNameEmpty: 'Como a meta deve se chamar?', askType: 'Que tipo de meta é "{name}" — mensal, trimestral, anual, parcelada, ou uma promessa única?', typeRetry: 'Desculpe, não entendi o tipo — "{name}" é mensal, trimestral, anual, parcelada, ou uma promessa única?', askInstallmentCount: 'Ótimo — em quantas parcelas "{name}" deve ser dividida?', installmentCountRetry: 'Desculpe, preciso de um número inteiro de 2 ou mais — em quantas parcelas "{name}" deve ser dividida?', askInstallmentType: 'Ótimo — "{name}" ({count} parcelas) terá um valor fixo a cada período, ou um valor variável que você definirá a cada vez?', installmentTypeRetry: 'Desculpe, diga "fixo" ou "variável" — "{name}" ({count} parcelas) será fixo ou variável?' },
+  zh: { confirm: '您是想创建一个新目标吗？', askName: '好的 — 这个目标叫什么名字？', askNameEmpty: '这个目标叫什么名字？', askType: '"{name}"是什么类型的目标 — 月度、季度、年度、分期，还是一次性认捐？', typeRetry: '抱歉，我没听清类型 — "{name}"是月度、季度、年度、分期，还是一次性认捐？', askInstallmentCount: '好的 — "{name}"应分成多少期？', installmentCountRetry: '抱歉，需要一个至少为2的整数 — "{name}"应分成多少期？', askInstallmentType: '好的 — "{name}"（{count}期）每期金额固定，还是每次由您设置的可变金额？', installmentTypeRetry: '抱歉，请回答"固定"或"可变" — "{name}"（{count}期）是固定还是可变？' }
 };
 const CREATE_GOAL_CONFIRM_RE = new RegExp(Object.values(CREATE_GOAL_TEXT).map(t => escapeRegExp(t.confirm)).join('|'), 'i');
 const CREATE_GOAL_NAME_RE = new RegExp(Object.values(CREATE_GOAL_TEXT).map(t => `^${escapeRegExp(t.askName)}$`).join('|'), 'i');
 const CREATE_GOAL_TYPE_RE = { test: (text) => testFlowAnyLang(CREATE_GOAL_TEXT, 'askType', text) };
 const CREATE_GOAL_INSTALLMENT_COUNT_RE = { test: (text) => testFlowAnyLang(CREATE_GOAL_TEXT, 'askInstallmentCount', text) };
+const CREATE_GOAL_INSTALLMENT_TYPE_RE = { test: (text) => testFlowAnyLang(CREATE_GOAL_TEXT, 'askInstallmentType', text) };
+const FIXED_WORD_RE = /\bfixed\b|\bfest\b|\bfixe\b|\bfijo\b|ثابت|фиксированн\w*|\bfixo\b|固定/i;
+const VARIABLE_WORD_RE = /\bvariable\b|variabel|variável|متغير|переменн\w*|可变/i;
 
 // Registry of every question regex belonging to a confirm-first multi-turn
 // flow — each flow pushes its own step markers onto this array right after
@@ -314,7 +317,7 @@ const CREATE_GOAL_INSTALLMENT_COUNT_RE = { test: (text) => testFlowAnyLang(CREAT
 // back out with "cancel"/"stop"/etc. at ANY step of ANY such flow, checked
 // from the very top of parseLocalIntent before the delete/remove intent
 // check would otherwise misread "cancel" as wanting to delete something.
-const PENDING_FLOW_MARKERS = [CREATE_GOAL_CONFIRM_RE, CREATE_GOAL_NAME_RE, CREATE_GOAL_TYPE_RE, CREATE_GOAL_INSTALLMENT_COUNT_RE];
+const PENDING_FLOW_MARKERS = [CREATE_GOAL_CONFIRM_RE, CREATE_GOAL_NAME_RE, CREATE_GOAL_TYPE_RE, CREATE_GOAL_INSTALLMENT_COUNT_RE, CREATE_GOAL_INSTALLMENT_TYPE_RE];
 
 // Separate, smaller registry for steps where a bare "no" is a normal answer
 // to that specific question (not an abort) — e.g. "no goal, just add them"
@@ -389,9 +392,29 @@ function extractInstallmentCount(msg) {
 function parseCreateGoal(msg, history) {
   const lastAssistant = [...(history || [])].reverse().find(h => h.role === 'assistant');
 
+  // Step 6: answering "will X be a fixed or variable amount?" — the final
+  // step for the installment category only.
+  if (lastAssistant && CREATE_GOAL_INSTALLMENT_TYPE_RE.test(lastAssistant.content)) {
+    const extracted = execFlowAnyLang(CREATE_GOAL_TEXT, 'askInstallmentType', lastAssistant.content);
+    const name = extracted ? extracted.name : '';
+    const count = extracted ? extracted.count : '';
+    const isFixed = FIXED_WORD_RE.test(msg);
+    const isVariable = !isFixed && VARIABLE_WORD_RE.test(msg);
+    if (!isFixed && !isVariable) {
+      return { reply: renderFlow(CREATE_GOAL_TEXT, 'installmentTypeRetry', { name, count }), handled: true };
+    }
+    const totalInstallments = extractInstallmentCount(count) || undefined;
+    return {
+      reply: 'Here\'s what I understood:',
+      action: { type: 'create_goal', params: { name, category: 'installment', targetAmount: 0, totalInstallments, installmentType: isFixed ? 'fixed' : 'variable' } },
+      handled: true
+    };
+  }
+
   // Step 5: answering "how many installments should X be split into?" —
   // only reached for the installment category (steps 3/4 route here
-  // instead of finalizing directly, see below).
+  // instead of finalizing directly, see below). Asks one more question
+  // (fixed vs variable, step 6 above) rather than finalizing right away.
   if (lastAssistant && CREATE_GOAL_INSTALLMENT_COUNT_RE.test(lastAssistant.content)) {
     const extracted = execFlowAnyLang(CREATE_GOAL_TEXT, 'askInstallmentCount', lastAssistant.content);
     const name = extracted ? extracted.name : '';
@@ -399,11 +422,7 @@ function parseCreateGoal(msg, history) {
     if (!totalInstallments) {
       return { reply: renderFlow(CREATE_GOAL_TEXT, 'installmentCountRetry', { name }), handled: true };
     }
-    return {
-      reply: 'Here\'s what I understood:',
-      action: { type: 'create_goal', params: { name, category: 'installment', targetAmount: 0, totalInstallments } },
-      handled: true
-    };
+    return { reply: renderFlow(CREATE_GOAL_TEXT, 'askInstallmentType', { name, count: String(totalInstallments) }), handled: true };
   }
 
   // Step 4: answering "what type of goal is X — monthly, yearly, or pledge?"
@@ -2476,7 +2495,7 @@ function parseSubscriberFallbackMenu(msg, history) {
 // before anything else gets a chance to misfire on this message.
 // ---------------------------------------------------------------
 const FLOW_OWNERS = [
-  { markers: [CREATE_GOAL_CONFIRM_RE, CREATE_GOAL_NAME_RE, CREATE_GOAL_TYPE_RE, CREATE_GOAL_INSTALLMENT_COUNT_RE], fn: parseCreateGoal },
+  { markers: [CREATE_GOAL_CONFIRM_RE, CREATE_GOAL_NAME_RE, CREATE_GOAL_TYPE_RE, CREATE_GOAL_INSTALLMENT_COUNT_RE, CREATE_GOAL_INSTALLMENT_TYPE_RE], fn: parseCreateGoal },
   { markers: [ADD_SUBSCRIBER_CONFIRM_RE, ADD_SUBSCRIBER_NAME_RE, ADD_SUBSCRIBER_MOBILE_RE, ADD_SUBSCRIBER_GOAL_OR_NOT_RE, ADD_SUBSCRIBER_AMOUNT_RE], fn: parseAddSubscriber },
   { markers: [SUBSCRIBE_CONFIRM_RE, SUBSCRIBE_WHO_RE, SUBSCRIBE_GOAL_RE, SUBSCRIBE_AMOUNT_RE], fn: parseSubscribeToGoal },
   { markers: [CREATE_PLEDGE_CONFIRM_RE, CREATE_PLEDGE_WHO_RE, CREATE_PLEDGE_GOAL_RE, CREATE_PLEDGE_AMOUNT_RE], fn: parseCreatePledge },

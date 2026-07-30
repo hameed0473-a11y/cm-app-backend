@@ -77,11 +77,13 @@ async function fetchNormalizedUserData(supabase, userId) {
     status: t.status,
     targetAmount: Number(t.target_amount) || 0,
     ...(t.category !== 'event' ? { rollover: !!t.rollover } : {}),
-    // Installment goals only — both null/undefined for every other
-    // category, so this stays absent from the object rather than adding
-    // noisy null fields to every other goal's response.
+    // Installment goals only — null/undefined for every other category, so
+    // these stay absent from the object rather than adding noisy null
+    // fields to every other goal's response.
     ...(t.total_installments != null ? { totalInstallments: t.total_installments } : {}),
-    ...(t.installments_paid != null ? { installmentsPaid: t.installments_paid } : {})
+    ...(t.installments_paid != null ? { installmentsPaid: t.installments_paid } : {}),
+    ...(t.installment_type != null ? { installmentType: t.installment_type } : {}),
+    ...(t.awaiting_amount != null ? { awaitingAmount: !!t.awaiting_amount } : {})
   }));
 
   const contributions = (contributionsRows || []).map(c => ({
