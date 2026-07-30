@@ -38,8 +38,12 @@ app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (Capacitor Android sends null origin)
     if (!origin) return callback(null, true);
-    // Allow localhost variants (dev + Capacitor)
-    if (origin.includes('localhost') || origin.includes('capacitor://')) {
+    // Allow localhost variants (dev + Capacitor) and GitHub Codespace previews
+    if (
+      origin.includes('localhost') ||
+      origin.includes('capacitor://') ||
+      origin.includes('.app.github.dev')
+    ) {
       return callback(null, true);
     }
     if (allowedOrigins.includes(origin)) return callback(null, true);
