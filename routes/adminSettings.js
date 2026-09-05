@@ -65,10 +65,24 @@ router.get('/admin-platform-settings', requireAdmin, async (req, res) => {
 
     const rates = await getCurrentRates();
 
+    const { data: pricingRow } = await supabase
+      .from('platform_pricing')
+      .select('receipts_per_subscriber')
+      .eq('id', 1)
+      .maybeSingle();
+
     res.json({
       success: true,
       integrations: byProvider,
-      pricing: { inrRate: rates.INR, intlRate: rates.USD },
+      pricing: {
+        inrRate: rates.INR,
+        intlRate: rates.USD,
+        // Default cap applied to every treasurer's pro_users row when this
+        // is saved below — see the comment on /admin-save-pricing. Falls
+        // back to the same 100 lib/pricing.js's getMaxReceipts() uses when
+        // a treasurer's own column is unset.
+        receiptsPerSubscriber: pricingRow?.receipts_per_subscriber ?? 100
+      },
       bank: {
         accountHolder: bank?.account_holder || '',
         accountNumberMasked: bank?.account_number_enc ? maskAccountNumber(decrypt(bank.account_number_enc)) : '',
@@ -189,15 +203,27 @@ router.post('/admin-save-bank-details', requireAdmin, async (req, res) => {
   }
 });
 
-// --- Save the per-subscriber pricing rates (INR + international) ---
-// Takes effect immediately for every NEW pricing calculation (the trial
-// pop-up, the renewal/upgrade screens, the trial-expired screen) — no
-// redeploy needed. Does NOT retroactively change what anyone already
-// paid or was already billed for; it only affects amounts computed
-// going forward.
+// --- Save the per-subscriber pricing rates (INR + international), and
+// optionally the default receipts-per-subscriber cap ---
+// Rate changes take effect immediately for every NEW pricing calculation
+// (the trial pop-up, the renewal/upgrade screens, the trial-expired
+// screen) — no redeploy needed. Does NOT retroactively change what
+// anyone already paid or was already billed for; it only affects
+// amounts computed going forward.
+//
+// receiptsPerSubscriber is optional and, unlike the rates, is NOT purely
+// forward-looking: lib/pricing.js's getMaxReceipts() reads it straight off
+// each treasurer's own pro_users.receipts_per_subscriber column (falling
+// back to 100 only when that column is NULL), so saving a new value here
+// also bulk-updates every existing treasurer's column — same behavior
+// this previously lived under on the Aftech website's admin panel, now
+// consolidated into this one endpoint. Omit the field to change only the
+// rates and leave every treasurer's current cap untouched.
 router.post('/admin-save-pricing', requireAdmin, async (req, res) => {
   const inrRate = Number(req.body.inrRate);
   const intlRate = Number(req.body.intlRate);
+  const receiptsPerSubscriberProvided = req.body.receiptsPerSubscriber !== undefined && req.body.receiptsPerSubscriber !== null && req.body.receiptsPerSubscriber !== '';
+  const receiptsPerSubscriber = receiptsPerSubscriberProvided ? Number(req.body.receiptsPerSubscriber) : null;
 
   if (!Number.isFinite(inrRate) || inrRate <= 0) {
     return res.status(400).json({ error: 'Enter a valid India (INR) rate greater than 0.' });
@@ -205,18 +231,37 @@ router.post('/admin-save-pricing', requireAdmin, async (req, res) => {
   if (!Number.isFinite(intlRate) || intlRate <= 0) {
     return res.status(400).json({ error: 'Enter a valid international rate greater than 0.' });
   }
+  if (receiptsPerSubscriberProvided && (!Number.isFinite(receiptsPerSubscriber) || receiptsPerSubscriber <= 0)) {
+    return res.status(400).json({ error: 'Enter a valid receipts-per-subscriber cap greater than 0.' });
+  }
 
   try {
+    const pricingRow = { id: 1, inr_rate: inrRate, intl_rate: intlRate, updated_at: new Date().toISOString() };
+    if (receiptsPerSubscriberProvided) pricingRow.receipts_per_subscriber = receiptsPerSubscriber;
+
     const { error } = await supabase
       .from('platform_pricing')
-      .upsert({ id: 1, inr_rate: inrRate, intl_rate: intlRate, updated_at: new Date().toISOString() }, { onConflict: 'id' });
+      .upsert(pricingRow, { onConflict: 'id' });
 
     if (error) {
       console.error('admin-save-pricing error:', error.message);
       return res.status(500).json({ error: 'Could not save pricing.' });
     }
 
-    res.json({ success: true, inrRate, intlRate });
+    if (receiptsPerSubscriberProvided) {
+      const { error: bulkError } = await supabase
+        .from('pro_users')
+        .update({ receipts_per_subscriber: receiptsPerSubscriber })
+        .not('id', 'is', null);
+      if (bulkError) {
+        // Rates already saved successfully — report the partial failure
+        // rather than a blanket error, same as the panel this replaces did.
+        console.error('admin-save-pricing bulk receipts-cap update error:', bulkError.message);
+        return res.json({ success: true, inrRate, intlRate, receiptsPerSubscriber, capUpdateFailed: true });
+      }
+    }
+
+    res.json({ success: true, inrRate, intlRate, ...(receiptsPerSubscriberProvided ? { receiptsPerSubscriber } : {}) });
   } catch (err) {
     console.error('admin-save-pricing error:', err?.message || err);
     res.status(500).json({ error: 'Could not save pricing.' });
