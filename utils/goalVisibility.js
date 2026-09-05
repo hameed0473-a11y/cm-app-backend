@@ -11,12 +11,12 @@
 // /pro/login, /pro/sync (GET) — so a hidden category simply never
 // shows up when someone opens the app.
 //
-// To bring a hidden category back into view, remove it from
-// HIDDEN_CATEGORIES below — nothing else in the codebase needs to
-// change.
+// To hide a category again later, add it back to HIDDEN_CATEGORIES
+// below — nothing else in the codebase needs to change. Currently
+// empty: every goal category (including quarterly) is visible again.
 // ===================================================================
 
-const HIDDEN_CATEGORIES = ['quarterly'];
+const HIDDEN_CATEGORIES = [];
 
 // Returns a NEW data object ({ contributors, targets, contributions,
 // pledges }) with every hidden-category target removed, plus anything
@@ -28,12 +28,17 @@ const HIDDEN_CATEGORIES = ['quarterly'];
 // pricing calculation that should keep counting real subscribers even
 // on a hidden goal) should keep using the original, unfiltered object
 // and only pass a filtered copy to the client-facing response.
-function hideConfiguredCategories(data) {
+//
+// `hiddenCategories` defaults to the live HIDDEN_CATEGORIES list above
+// but can be overridden — mainly so tests can exercise the filtering
+// logic itself without depending on whatever categories happen to be
+// hidden in production at any given time.
+function hideConfiguredCategories(data, hiddenCategories = HIDDEN_CATEGORIES) {
   if (!data) return data;
 
   const hiddenTargetIds = new Set(
     (data.targets || [])
-      .filter(t => HIDDEN_CATEGORIES.includes(t.category))
+      .filter(t => hiddenCategories.includes(t.category))
       .map(t => t.id)
   );
   if (hiddenTargetIds.size === 0) return data;
