@@ -5,7 +5,6 @@ const supabase = require('../../lib/supabase');
 const { requireProOrStaffToken } = require('../../middleware/auth');
 const { computeAmountDue, countUniqueSubscribers, getMaxReceipts, getReceiptUsage } = require('../../lib/pricing');
 const { fetchNormalizedUserData, compareUserData } = require('../../utils/readFromNormalized');
-const { hideConfiguredCategories } = require('../../utils/goalVisibility');
 const { SUPPORTED_CURRENCIES } = require('../../lib/gateways');
 
 const router = express.Router();
@@ -89,12 +88,7 @@ router.get('/web-dashboard-data', requireProOrStaffToken, async (req, res) => {
 
     res.json({
       success: true,
-      // Hides configured goal categories (currently: quarterly) from what
-      // the client sees — see utils/goalVisibility.js. subscriberCount/
-      // pricing above and the diffing below both keep using the full,
-      // unfiltered responseData, so a hidden goal's real subscribers still
-      // count for billing and this never shows up as false "drift".
-      data: hideConfiguredCategories(responseData),
+      data: responseData,
       profile,
       supportedCurrencies: SUPPORTED_CURRENCIES,
       // Lets the frontend re-derive role/name after a fresh page load even

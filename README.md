@@ -105,7 +105,7 @@ Four JWT types are in use. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full a
 The system is mid-migration from a single JSON blob per user (`pro_user_data`) to normalized relational tables. Writes go to both; reads still come from the JSON blob. `utils/mirrorWrite.js` handles the shadow writes. `utils/readFromNormalized.js` is the future read path (shadow-read mode only, not yet serving production reads).
 
 ### Goal rollover
-Monthly/quarterly/yearly/installment goals auto-advance at period boundaries. The engine runs in-process — no external cron setup needed. See `utils/rolloverEngine.js` and the comment block in `server.js`.
+Monthly/yearly/installment goals auto-advance at period boundaries. The engine runs in-process — no external cron setup needed. See `utils/rolloverEngine.js` and the comment block in `server.js`.
 
 ### Payment webhook routing
 A single webhook endpoint handles both platform billing events and per-treasurer contribution events. The routing logic selects which Razorpay secret to verify against based on `notes.type` in the event payload. See `routes/payments.js`.

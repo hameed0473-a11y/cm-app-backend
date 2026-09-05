@@ -3,7 +3,7 @@
 const { goalEntityType } = require('../utils/idGen');
 
 describe('goalEntityType', () => {
-  const validCategories = ['monthly', 'quarterly', 'yearly', 'special', 'event', 'pledge', 'installment'];
+  const validCategories = ['monthly', 'yearly', 'special', 'event', 'pledge', 'installment'];
 
   test.each(validCategories)('returns the category string for "%s"', (category) => {
     expect(goalEntityType(category)).toBe(category);

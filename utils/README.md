@@ -4,7 +4,7 @@ Business logic and shared helpers. None of these files define Express routes; th
 
 ## rolloverEngine.js
 
-Automatic goal rollover. Monthly, quarterly, yearly, and installment goals advance to the next period at a boundary: the old goal is marked `completed`, a new one is created, and every subscriber carries over with any unpaid arrears compounded on top of their normal recurring amount.
+Automatic goal rollover. Monthly, yearly, and installment goals advance to the next period at a boundary: the old goal is marked `completed`, a new one is created, and every subscriber carries over with any unpaid arrears compounded on top of their normal recurring amount.
 
 Key design decisions:
 - **In-process scheduler** (no external cron) — runs 30 s after boot then hourly. Catches missed periods even if the server was down.

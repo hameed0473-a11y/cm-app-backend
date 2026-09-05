@@ -13,7 +13,6 @@
 
 const ENTITY_CODES = {
   monthly: 'gm',
-  quarterly: 'gq',
   yearly: 'gy',
   special: 'gs',
   event: 'ge',
@@ -48,7 +47,7 @@ async function nextId(supabase, userId, entityType) {
 // but each category counts independently, e.g. a user's first pledge is
 // -gp-0001 even if they already have five monthly goals.
 function goalEntityType(category) {
-  if (!['monthly', 'quarterly', 'yearly', 'special', 'event', 'pledge', 'installment'].includes(category)) {
+  if (!['monthly', 'yearly', 'special', 'event', 'pledge', 'installment'].includes(category)) {
     throw new Error(`goalEntityType: unknown category "${category}"`);
   }
   return category;

@@ -120,7 +120,7 @@ The webhook endpoint (`/webhook/razorpay`) inspects `notes.type` in the unverifi
 
 ## Goal Rollover Engine
 
-Monthly, quarterly, yearly, and installment goals auto-roll-over at period boundaries. The engine (`utils/rolloverEngine.js`) runs:
+Monthly, yearly, and installment goals auto-roll-over at period boundaries. The engine (`utils/rolloverEngine.js`) runs:
 
 1. **At startup** — 30 seconds after server boot (catches periods missed while the server was down)
 2. **Hourly** — checks if the calendar day has advanced and runs if so

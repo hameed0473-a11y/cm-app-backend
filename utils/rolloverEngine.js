@@ -26,16 +26,8 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
-// Quarterly uses calendar quarters (Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec),
-// keyed "YYYY-Qn" — deliberately distinct from the "YYYY-MM" shape monthly/
-// installment goals use, so isPeriodBefore's plain string comparison still
-// sorts correctly within a category (never compared across categories).
 function periodKeyForDate(date, category) {
   if (category === 'yearly') return String(date.getFullYear());
-  if (category === 'quarterly') {
-    const quarter = Math.floor(date.getMonth() / 3) + 1;
-    return `${date.getFullYear()}-Q${quarter}`;
-  }
   // 'monthly' and 'installment' (which auto-stops after N monthly periods,
   // see the installmentsPaid/totalInstallments handling below) share this
   // same "YYYY-MM" period shape.
@@ -44,10 +36,6 @@ function periodKeyForDate(date, category) {
 
 function nextPeriodKey(key, category) {
   if (category === 'yearly') return String(Number(key) + 1);
-  if (category === 'quarterly') {
-    const [y, q] = key.split('-Q').map(Number);
-    return q >= 4 ? `${y + 1}-Q1` : `${y}-Q${q + 1}`;
-  }
   const [y, m] = key.split('-').map(Number);
   const d = new Date(y, m, 1); // m is already 1-indexed here, so this lands on next month
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -55,10 +43,6 @@ function nextPeriodKey(key, category) {
 
 function periodLabel(key, category) {
   if (category === 'yearly') return key;
-  if (category === 'quarterly') {
-    const [y, q] = key.split('-Q');
-    return `Q${q} ${y}`;
-  }
   const [y, m] = key.split('-').map(Number);
   return `${MONTH_NAMES[m - 1]} ${y}`;
 }
@@ -123,9 +107,13 @@ async function processUserRow(row, today) {
   const afterWrite = [];
 
   // Snapshot the eligible starting set before we start pushing new targets
-  // into `targets` mid-loop.
+  // into `targets` mid-loop. 'quarterly' is deliberately not in this list
+  // — quarterly goal support was removed, so any pre-existing quarterly
+  // targets are simply skipped here from now on: they stay exactly as
+  // they are (still visible, still payable) but never advance to a new
+  // period again.
   const eligible = targets.filter(t =>
-    (t.category === 'monthly' || t.category === 'yearly' || t.category === 'quarterly' || t.category === 'installment') &&
+    (t.category === 'monthly' || t.category === 'yearly' || t.category === 'installment') &&
     t.status === 'active' &&
     t.rollover !== false
   );
@@ -171,7 +159,7 @@ async function processUserRow(row, today) {
       // period shape, see periodKeyForDate above) but carry a fixed
       // totalInstallments count and auto-stop rolling over once that many
       // periods have been created — the "recurring but self-terminating"
-      // behavior, as opposed to monthly/yearly/quarterly which roll over
+      // behavior, as opposed to monthly/yearly which roll over
       // indefinitely until the treasurer stops them.
       const isInstallment = category === 'installment';
       const installmentsPaid = isInstallment ? (working.installmentsPaid || 0) + 1 : undefined;

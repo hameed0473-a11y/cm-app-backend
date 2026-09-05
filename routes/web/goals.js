@@ -27,12 +27,12 @@ const router = express.Router();
 router.post('/web-create-target', requireProToken, async (req, res) => {
   const { name, category, targetAmount, totalInstallments, installmentType } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
-  if (!['monthly', 'quarterly', 'yearly', 'event', 'installment'].includes(category)) {
-    return res.status(400).json({ error: "category must be 'monthly', 'quarterly', 'yearly', 'event', or 'installment'" });
+  if (!['monthly', 'yearly', 'event', 'installment'].includes(category)) {
+    return res.status(400).json({ error: "category must be 'monthly', 'yearly', 'event', or 'installment'" });
   }
   // Installment goals need a fixed number of periods to auto-stop after
   // (see utils/rolloverEngine.js) — every other category either rolls over
-  // indefinitely (monthly/quarterly/yearly) or not at all (event). They also
+  // indefinitely (monthly/yearly) or not at all (event). They also
   // need to know upfront whether the per-period amount is 'fixed' (same
   // every period, the default/back-compat value) or 'variable' (treasurer
   // re-enters it each period — see /web-set-installment-amount below).
@@ -57,7 +57,7 @@ router.post('/web-create-target', requireProToken, async (req, res) => {
 
     const targets = userData.targets || [];
 
-    // Monthly/quarterly/yearly/installment goals are dated from the moment
+    // Monthly/yearly/installment goals are dated from the moment
     // they're created (e.g. "Cleaning Charges — July 2026") and roll over
     // automatically at the end of their period — a new dated goal is
     // created, every subscriber carries over, and any unpaid balance is

@@ -10,7 +10,6 @@ const { checkBruteForce, recordFailedAttempt, clearBruteForce } = require('../mi
 const { getDefaultBreakup, getRemainingBreakup, breakupTotal } = require('../utils/arrears');
 const { mirrorContribution, mirrorPledge, mirrorFullSyncBatch } = require('../utils/mirrorWrite');
 const { fetchNormalizedUserData, compareUserData } = require('../utils/readFromNormalized');
-const { hideConfiguredCategories } = require('../utils/goalVisibility');
 const { sendEmailViaResend, generateOtp } = require('../utils/email');
 const { computeAmountDue, countUniqueSubscribers } = require('../lib/pricing');
 
@@ -581,11 +580,7 @@ router.post('/pro/login', async (req, res) => {
       success: true,
       user: safeUser,
       previousLogin: previousLoginTime,
-      // Hides configured goal categories (currently: quarterly) from what
-      // the client sees — see utils/goalVisibility.js. Diffing below keeps
-      // using the full, unfiltered responseData so this never shows up as
-      // false "drift".
-      data: hideConfiguredCategories(responseData),
+      data: responseData,
       proSyncToken: issueProAppToken(user.id, user.mobile),
       trialInfo
     });
@@ -900,11 +895,7 @@ router.get('/pro/sync', requireProOrStaffToken, async (req, res) => {
 
     res.json({
       success: true,
-      // Hides configured goal categories (currently: quarterly) from what
-      // the client sees — see utils/goalVisibility.js. Diffing below keeps
-      // using the full, unfiltered responseData so this never shows up as
-      // false "drift".
-      data: hideConfiguredCategories(responseData),
+      data: responseData,
       updatedAt: userData?.updated_at
     });
 
